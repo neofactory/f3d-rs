@@ -1,0 +1,21 @@
+This project includes Rust adaptations of portions of ezf3d.
+
+Upstream: https://github.com/AlexSabaka/ezf3d
+Version: 0.1.1
+Reference commit: 97fe90ab8c39c3978fa6354f4a21c5ebdbc38c6e
+License: MIT
+Copyright (c) 2026 ezf3d contributors
+
+The original copyright and permission notice is reproduced verbatim in
+LICENSE-MIT-ezf3d. Retain that file when distributing substantial portions of
+the adapted implementation.
+
+Adapted areas include ASM header/token framing and analytic geometry layouts,
+B-Rep pointer slots, and Fusion Meta/Bulk stream framing. The Rust reader uses
+checked reads, explicit resource limits, section-local ASM pointer indices,
+and direct snapshot/body-container component links. It does not embed or call
+the Python implementation at runtime.
+
+Dependencies are licensed separately under the notices supplied by their
+respective packages. This software license does not grant rights to input CAD
+models. No Autodesk/Brother model geometry is included in this crate's tests.

@@ -4,10 +4,7 @@ use f3d::{
     asm::{self, tag},
     math::{Mat4, norm, sub},
 };
-use std::{
-    collections::BTreeMap,
-    io::{Cursor, Write},
-};
+use std::io::{Cursor, Write};
 use zip::{CompressionMethod, write::SimpleFileOptions};
 
 fn text(tag: u8, s: &str, out: &mut Vec<u8>) {
@@ -407,40 +404,25 @@ fn proper_rigid_inverse_and_negative_axis_rotation() {
     reflection.0[0][0] = -1.;
     assert!(!reflection.is_rigid(1e-9));
 }
-fn machine() -> f3d::machine::MachineDefinition {
-    f3d::machine::MachineDefinition::parse(br#"{
-      "controller":{"default":{"head_info_part_id":"head","table_part_id":"table"}},
-      "kinematics":{"default":{"units":{"length":"mm","angle":"degrees"},"parts":[
-        {"id":"Z","name":"Z","type":"linear","direction":[0,0,1],"min":-380,"max":0,"parts":[{"id":"head","type":"head","attach_frame":{"point":[0,45,495],"x_direction":[1,0,0],"z_direction":[0,0,1]}}]},
-        {"id":"Y","type":"linear","direction":[0,-1,0],"parts":[{"id":"X","type":"linear","direction":[-1,0,0],"parts":[{"id":"rotary_0","name":"A","type":"rotary","min":-30,"max":120,"axis_of_rotation":{"direction":[-1,0,0],"point":[-284,0,50]},"parts":[{"id":"rotary_1","name":"C","type":"rotary","axis_of_rotation":{"direction":[0,0,-1],"point":[0,0,0]},"parts":[{"id":"table","type":"table","attach_frame":{"point":[0,0,0],"x_direction":[1,0,0],"z_direction":[0,0,1]}}]}]}]}]}
-      ]}}
-    }"#).unwrap()
-}
+
 #[test]
-fn machine_kinematics_preserve_hierarchy_and_continuous_c() {
-    let m = machine();
+fn embedded_machine_definition_remains_an_opaque_asset() {
+    let payload = b"opaque machine payload";
+    let bytes = zip(
+        &[
+            ("Manifest.dat", b"unknown revision"),
+            ("Asset/Machine/model.mch", payload),
+        ],
+        CompressionMethod::Stored,
+    );
+    let file = FusionFile::read(Cursor::new(bytes), &Limits::default()).unwrap();
+    let doc = file.documents()[0];
     assert_eq!(
-        m.spindle_in_table(&BTreeMap::new()).unwrap(),
-        [0., 45., 495.]
+        doc.archive.bytes("Asset/Machine/model.mch").unwrap(),
+        payload
     );
-    let coordinates = BTreeMap::from([
-        ("X".into(), 100.),
-        ("Y".into(), 50.),
-        ("Z".into(), -100.),
-        ("A".into(), 90.),
-        ("C".into(), 1080.),
-    ]);
-    let pose = m.pose(&coordinates).unwrap();
-    let p = pose["rotary_0"].transform_point([0.; 3]);
-    assert!(norm(sub(p, [-100., -100., 50.])) < 1e-9);
-    assert!(m.pose(&BTreeMap::from([("A".into(), 121.)])).is_err());
-    assert!(m.pose(&BTreeMap::from([("typo".into(), 0.)])).is_err());
-    assert!(m.pose(&BTreeMap::from([("Z".into(), f64::NAN)])).is_err());
-    assert!(
-        m.pose(&BTreeMap::from([
-            ("rotary_0".into(), 10.),
-            ("A".into(), 20.)
-        ]))
-        .is_err()
-    );
+    assert_eq!(doc.issues.len(), 1);
+    assert_eq!(doc.issues[0].stage, "manifest");
+    let summary = serde_json::to_value(doc.summary()).unwrap();
+    assert!(summary.get("machines").is_none());
 }

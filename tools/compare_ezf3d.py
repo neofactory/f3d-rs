@@ -69,8 +69,6 @@ with F3DArchive(model) as archive:
         totals["streams"] += 1
         totals["entities"] += len(py.entities)
         totals["live_faces"] += check["live_faces"]
-    for machine in rust["file"]["machines"]:
-        assert machine["definition"]["raw"] == json.loads(archive.read(machine["path"]))
 
 # Compare ownership/placement with the independently recovered viewer audit
 # when this validation is run on the original Brother input.

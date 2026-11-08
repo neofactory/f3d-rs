@@ -1,12 +1,17 @@
 # f3d-rs
 
-A native Rust library for reading Autodesk Fusion `.f3d` archives, nested
-`.f3z` documents, ASM B-Rep records, and Fusion `.mch` machine definitions.
+A native Rust library for reading geometry assets from Autodesk Fusion `.f3d`
+archives and nested `.f3z` packages, including ASM B-Rep records, components,
+and placement information.
 It does not require Python, Fusion, or an Autodesk service at runtime.
 
 This is a read-only implementation based on portions of
 [ezf3d](https://github.com/AlexSabaka/ezf3d), with its MIT notice retained.
 It is not a complete port of ezf3d's feature set.
+
+Machine definitions and axis motion live in the separate
+[machine-rs](https://github.com/neofactory/machine-rs) project. This crate owns
+geometry assets and package reading; it has no dependency on the machine project.
 
 ## Use from Rust
 
@@ -19,7 +24,7 @@ f3d = { package = "f3d-rs", git = "https://github.com/neofactory/f3d-rs" }
 use f3d::FusionFile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let file = FusionFile::open("machine.f3d")?;
+    let file = FusionFile::open("model.f3d")?;
 
     for document in file.documents() {
         println!("{:#?}", document.summary());
@@ -62,51 +67,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Package documents remain separate. XRef relationships are not resolved into
 one flattened assembly.
 
-## Read a machine and evaluate its pose
-
-```rust,no_run
-use std::collections::BTreeMap;
-use f3d::machine::MachineDefinition;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let machine = MachineDefinition::parse(&std::fs::read("machine.mch")?)?;
-    let coordinates = BTreeMap::from([
-        ("X".to_owned(), 100.0),
-        ("Y".to_owned(), 50.0),
-        ("Z".to_owned(), -100.0),
-        ("A".to_owned(), 90.0),
-        ("C".to_owned(), 1080.0),
-    ]);
-    let transforms = machine.pose(&coordinates)?;
-    println!("A: {:?}", transforms.get("rotary_0"));
-    println!("spindle in table: {:?}", machine.spindle_in_table(&coordinates)?);
-    Ok(())
-}
-```
-
-Set each axis by its name, such as `A`, or its internal ID, such as `rotary_0`.
-Any axis you leave out is set to zero. Moving an axis also moves every part
-mounted on it. Rotary axes turn around the pivot specified in the machine file.
-
-The library checks the travel limits in the file. If a rotary axis has no
-rotation limits, it can turn through multiple revolutions. It returns an error
-for an unknown axis, a value outside its limits, or an invalid number such as
-NaN or infinity. Giving different values for `A` and `rotary_0` is also an error
-when they refer to the same axis.
-
-The result gives each part's position and orientation, using the units in the
-machine file. It does not account for tool length, controller or work offsets,
-or post-processor behavior, and it does not check for collisions. The current
-implementation returns an error if a part has a nonzero `offset` field or an
-unsupported part type.
-
 ## Command-line examples
 
 ```sh
-cargo run -q --example inspect -- machine.f3d
-cargo run -q --example inspect -- machine.f3d --summary-json
-cargo run -q --example inspect -- machine.f3d --json > decoded.json
-cargo run -q --example machine_pose -- machine.mch X=100 Y=50 Z=-100 A=90 C=1080
+cargo run -q --example inspect -- model.f3d
+cargo run -q --example inspect -- model.f3d --summary-json
+cargo run -q --example inspect -- model.f3d --json > decoded.json
 ```
 
 ## Implemented reading scope
@@ -124,7 +90,6 @@ cargo run -q --example machine_pose -- machine.mch X=100 Y=50 Z=-100 A=90 C=1080
 | Splines | Entire token records retained; typed NURBS extraction/evaluation not implemented |
 | Components | Names and snapshot body-map/container/component links with reciprocal owner checks |
 | Placements | Unique rigid-matrix candidates from registered occurrence records; **not a full occurrence-schema decoder** |
-| Machine JSON | Complete original JSON values plus typed kinematic tree, attachments, hierarchy-aware poses |
 | Other assets | Exact raw previews, materials, CAM XML, and unknown binary payloads available through the archive API |
 
 No tessellation, mesh export, graphics-cache decoder, parametric timeline
@@ -147,7 +112,6 @@ ASM geometry remains in its native coordinate unit, matching ezf3d. The
 Brother archive uses centimetres. No uniform multiplication is applied to
 token values: angles, ratios, knot values, normals, and lengths have different
 semantics. Design placement candidates carry an explicit `cm` unit label.
-Machine JSON transforms use `kinematics.default.units` independently.
 
 Diagnostic JSON encodes nonfinite ASM reals as `"f64:0x<IEEE-754 bits>"` so
 NaN payloads and infinite sentinels are retained. Finite values stay numbers.
@@ -168,7 +132,7 @@ Tests build synthetic inputs; no vendor machine geometry is bundled. They
 exercise 32/64-bit ASM, truncation, invalid strings and tags, nested subtypes,
 history pointer addressing, cyclic topology, all three ZIP compression types,
 multi-frame Zstandard, CRC failures, resource limits, F3Z nesting, native
-object indexing, and machine kinematics.
+object indexing, and preservation of embedded assets.
 
 The optional Python differential checker requires an environment containing
 ezf3d. This dependency is for development only:
@@ -180,14 +144,21 @@ python tools/compare_ezf3d.py /path/to/model.f3d
 For the Brother U500Xd2, the comparison checks every token in 10 B-Rep streams,
 57,837 entities, and 729,612 tokens, plus entity counts, vertex bounds, live
 topology, 7,510 analytic curve evaluations, and 2,749 surface evaluations.
-The expected live face count is 3,060. Machine JSON is compared without
-rounding its floating-point values. When the earlier viewer audit is beside
+The expected live face count is 3,060. When the earlier viewer audit is beside
 the source file, all 10 component links and neutral placement matrices are
 also checked. `validation-output/comparison.json` records the local result.
 
 This is one real-model validation case, not a claim of compatibility with
 every Fusion release. New files should be admitted with explicit diagnostics
 and additional independent fixtures.
+
+## Machine support moved to machine-rs
+
+Use `machine::MachineDefinition` from [machine-rs](https://github.com/neofactory/machine-rs)
+in place of `f3d::machine::MachineDefinition`. The `machine` module,
+`Document::machines`, and the summary's `machines` count have been removed.
+Embedded `.mch` entries remain available as raw bytes through `Archive::bytes`;
+pass those bytes to `machine::MachineDefinition::parse` in applications that need both.
 
 ## License
 

@@ -5,7 +5,7 @@
 //! or regenerate the parametric timeline. See `README.md` for the support scope.
 //!
 //! ```no_run
-//! let file = f3d::FusionFile::open("machine.f3d")?;
+//! let file = f3d::FusionFile::open("model.f3d")?;
 //! for document in file.documents() {
 //!     for brep in &document.breps {
 //!         println!("{}: {} faces", brep.path, brep.model.census().faces());
@@ -24,7 +24,6 @@ pub mod asm;
 mod binary;
 pub mod document;
 pub mod geometry;
-pub mod machine;
 pub mod math;
 pub mod streams;
 

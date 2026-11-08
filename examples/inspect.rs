@@ -1,4 +1,4 @@
-//! cargo run --example inspect -- machine.f3d [--json | --summary-json]
+//! cargo run --example inspect -- model.f3d [--json | --summary-json]
 use std::io::{self, Write};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();

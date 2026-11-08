@@ -4,7 +4,6 @@ use crate::{
     Error, Limits, Result,
     archive::Archive,
     asm,
-    machine::MachineDefinition,
     streams::{BodyBinding, Component, Manifest, PlacementCandidate, Segment},
 };
 use serde::Serialize;
@@ -19,11 +18,6 @@ use std::{
 pub struct Brep {
     pub path: String,
     pub model: asm::Model,
-}
-#[derive(Debug, Serialize)]
-pub struct Machine {
-    pub path: String,
-    pub definition: MachineDefinition,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct Issue {
@@ -45,7 +39,6 @@ pub struct Document {
     pub manifest: Option<Manifest>,
     pub segments: Vec<Segment>,
     pub breps: Vec<Brep>,
-    pub machines: Vec<Machine>,
     pub assemblies: Vec<Assembly>,
     pub issues: Vec<Issue>,
 }
@@ -57,7 +50,6 @@ impl Document {
             manifest: None,
             segments: Vec::new(),
             breps: Vec::new(),
-            machines: Vec::new(),
             assemblies: Vec::new(),
             issues: Vec::new(),
         };
@@ -85,19 +77,6 @@ impl Document {
                     path: entry.name.clone(),
                     model,
                 });
-            }
-            if entry.name.ends_with(".mch") {
-                match MachineDefinition::parse(&entry.data) {
-                    Ok(definition) => doc.machines.push(Machine {
-                        path: entry.name.clone(),
-                        definition,
-                    }),
-                    Err(e) => doc.issues.push(Issue {
-                        path: entry.name.clone(),
-                        stage: "machine".into(),
-                        message: e.to_string(),
-                    }),
-                }
             }
             if let Some(dir) = entry.name.strip_suffix("/MetaStream.dat") {
                 segment_dirs.entry(dir.into()).or_default().0 = true;
@@ -166,7 +145,6 @@ impl Document {
             face_records: self.breps.iter().map(|b| b.model.census().faces()).sum(),
             entities: self.breps.iter().map(|b| b.model.entities.len()).sum(),
             segments: self.segments.len(),
-            machines: self.machines.len(),
             component_bindings: self.assemblies.iter().map(|a| a.body_bindings.len()).sum(),
             issues: self.issues.clone(),
         }
@@ -181,7 +159,6 @@ pub struct Summary {
     pub face_records: usize,
     pub entities: usize,
     pub segments: usize,
-    pub machines: usize,
     pub component_bindings: usize,
     pub issues: Vec<Issue>,
 }

@@ -84,16 +84,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Axis IDs and command names are accepted. Missing coordinates are zero.
-Continuous axes have no invented range. Unknown names, conflicting aliases,
-nonfinite coordinates, and coordinates outside declared limits are errors.
-Parent transforms carry their descendants. Rotary motion uses
-`T(pivot) * R(axis, angle) * T(-pivot)`.
+Set each axis by its name, such as `A`, or its internal ID, such as `rotary_0`.
+Any axis you leave out is set to zero. Moving an axis also moves every part
+mounted on it. Rotary axes turn around the pivot specified in the machine file.
 
-The result is a geometric pose in the definition's length unit. It does not
-apply controller offsets, tool length, work offsets, post-processor logic,
-or collision rules. Nonzero part offsets and unsupported node kinds are
-explicitly refused rather than assigned guessed motion semantics.
+The library checks the travel limits in the file. If a rotary axis has no
+rotation limits, it can turn through multiple revolutions. It returns an error
+for an unknown axis, a value outside its limits, or an invalid number such as
+NaN or infinity. Giving different values for `A` and `rotary_0` is also an error
+when they refer to the same axis.
+
+The result gives each part's position and orientation, using the units in the
+machine file. It does not account for tool length, controller or work offsets,
+or post-processor behavior, and it does not check for collisions. The current
+implementation returns an error if a part has a nonzero `offset` field or an
+unsupported part type.
 
 ## Command-line examples
 

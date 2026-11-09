@@ -32,6 +32,25 @@ pub struct Assembly {
     pub body_bindings: Vec<BodyBinding>,
     pub placements: Vec<PlacementCandidate>,
 }
+/// Ownership evidence for a B-Rep stream within one design segment.
+/// Component IDs and occurrence candidates belong to that segment; IDs from
+/// different assemblies must not be joined just because their numbers match.
+#[derive(Debug, Clone, Copy)]
+pub struct BrepOwnership<'a> {
+    pub assembly: &'a Assembly,
+    pub binding: &'a BodyBinding,
+}
+impl<'a> BrepOwnership<'a> {
+    /// Candidate occurrences of this component, retaining source order and
+    /// ambiguity. A single candidate is still not a verified occurrence decode.
+    pub fn placement_candidates(&self) -> Vec<&'a PlacementCandidate> {
+        self.assembly
+            .placements
+            .iter()
+            .filter(|placement| placement.component_id == self.binding.component_id)
+            .collect()
+    }
+}
 #[derive(Debug, Serialize)]
 pub struct Document {
     pub name: String,
@@ -43,6 +62,22 @@ pub struct Document {
     pub issues: Vec<Issue>,
 }
 impl Document {
+    /// Find supported ownership bindings without choosing among multiple
+    /// owners. B-Rep blob references use the stream's archive file name.
+    pub fn brep_owners(&self, brep: &Brep) -> Vec<BrepOwnership<'_>> {
+        let blob = brep.path.rsplit('/').next().unwrap_or(&brep.path);
+        self.assemblies
+            .iter()
+            .flat_map(|assembly| {
+                assembly
+                    .body_bindings
+                    .iter()
+                    .filter(move |binding| binding.blob == blob)
+                    .map(move |binding| BrepOwnership { assembly, binding })
+            })
+            .collect()
+    }
+
     fn from_archive(name: String, archive: Archive, limits: &Limits) -> Result<Self> {
         let mut doc = Self {
             name,

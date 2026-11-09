@@ -426,3 +426,68 @@ fn embedded_machine_definition_remains_an_opaque_asset() {
     let summary = serde_json::to_value(doc.summary()).unwrap();
     assert!(summary.get("machines").is_none());
 }
+
+#[test]
+fn brep_placement_candidates_stay_with_the_owning_design_segment() {
+    use f3d::document::Assembly;
+    use f3d::streams::{BodyBinding, PlacementCandidate};
+    let data = zip(
+        &[("Manifest.dat", b""), ("Breps/part.smb", &sample(4))],
+        CompressionMethod::Stored,
+    );
+    let FusionFile::Document(mut document) =
+        FusionFile::read(Cursor::new(data), &Limits::default()).unwrap()
+    else {
+        panic!("expected a document")
+    };
+    let binding = BodyBinding {
+        map_record: 1,
+        container_id: 2,
+        component_id: 7,
+        component_name: "fixture part".into(),
+        blob: "part.smb".into(),
+        selectors: vec![],
+    };
+    let placement = |x| PlacementCandidate {
+        occurrence_id: 3,
+        component_id: 7,
+        offset: 0,
+        matrix: Mat4::translation([x, 0., 0.]),
+        units: "cm".into(),
+        evidence: "fixture".into(),
+    };
+    document.assemblies = vec![
+        Assembly {
+            segment: "DesignA".into(),
+            components: vec![],
+            body_bindings: vec![binding.clone()],
+            placements: vec![placement(10.)],
+        },
+        Assembly {
+            segment: "DesignB".into(),
+            components: vec![],
+            body_bindings: vec![],
+            placements: vec![placement(20.)],
+        },
+    ];
+    let owners = document.brep_owners(&document.breps[0]);
+    assert_eq!(owners.len(), 1);
+    let candidates = owners[0].placement_candidates();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].matrix.transform_point([0.; 3]), [10., 0., 0.]);
+    document.assemblies[0].placements.clear();
+    assert!(
+        document.brep_owners(&document.breps[0])[0]
+            .placement_candidates()
+            .is_empty()
+    );
+    document.assemblies[1].body_bindings.push(binding);
+    let owners = document.brep_owners(&document.breps[0]);
+    assert_eq!(
+        owners.len(),
+        2,
+        "ambiguous ownership must not choose the first segment"
+    );
+    assert!(owners[0].placement_candidates().is_empty());
+    assert_eq!(owners[1].placement_candidates().len(), 1);
+}

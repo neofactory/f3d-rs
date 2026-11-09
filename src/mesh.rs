@@ -15,7 +15,10 @@ use crate::{
     math::{Vec3, add, cross, dot, norm, scale, sub},
 };
 use serde::Serialize;
-use std::{collections::BTreeSet, f64::consts::TAU};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    f64::consts::TAU,
+};
 
 type Uv = [f64; 2];
 type FaceResult<T> = std::result::Result<T, String>;
@@ -67,6 +70,88 @@ pub struct MeshReport {
     pub faces_meshed: usize,
     pub faces_skipped: usize,
     pub issues: Vec<MeshIssue>,
+}
+
+/// A display mesh for one ASM body. Vertex indices and face triangle ranges
+/// refer to this body's arrays, while body/face indices retain source identity.
+/// Occurrence placements and machine motion have not been applied.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct BodyMesh {
+    pub body_index: usize,
+    pub positions: Vec<Vec3>,
+    pub triangles: Vec<[u32; 3]>,
+    pub faces: Vec<MeshedFace>,
+    pub issues: Vec<MeshIssue>,
+}
+
+impl MeshReport {
+    /// Split the report into independently drawable bodies. Shared vertices
+    /// are remapped per body, and bodies containing only skipped faces remain
+    /// present with their diagnostics. Coverage counters are derived from the
+    /// face records rather than copied from the report's summary fields.
+    pub fn split_by_body(&self) -> Result<Vec<BodyMesh>> {
+        let mut bodies = BTreeMap::<usize, (BodyMesh, BTreeMap<u32, u32>)>::new();
+        for face in &self.faces {
+            let (body, remap) = bodies.entry(face.body_index).or_insert_with(|| {
+                (
+                    BodyMesh {
+                        body_index: face.body_index,
+                        ..Default::default()
+                    },
+                    BTreeMap::new(),
+                )
+            });
+            let end = face
+                .triangle_start
+                .checked_add(face.triangle_count)
+                .ok_or_else(|| invalid_mesh_range(face.face_index))?;
+            let triangles = self
+                .triangles
+                .get(face.triangle_start..end)
+                .ok_or_else(|| invalid_mesh_range(face.face_index))?;
+            let start = body.triangles.len();
+            for triangle in triangles {
+                let mut local = [0; 3];
+                for (corner, &index) in triangle.iter().enumerate() {
+                    let point = self
+                        .positions
+                        .get(index as usize)
+                        .ok_or_else(|| invalid_mesh_range(face.face_index))?;
+                    let next = u32::try_from(body.positions.len())
+                        .map_err(|_| Error::Limit("body mesh vertex indices".into()))?;
+                    local[corner] = *remap.entry(index).or_insert_with(|| {
+                        body.positions.push(*point);
+                        next
+                    });
+                }
+                body.triangles.push(local);
+            }
+            body.faces.push(MeshedFace {
+                triangle_start: start,
+                ..face.clone()
+            });
+        }
+        for issue in &self.issues {
+            let (body, _) = bodies.entry(issue.body_index).or_insert_with(|| {
+                (
+                    BodyMesh {
+                        body_index: issue.body_index,
+                        ..Default::default()
+                    },
+                    BTreeMap::new(),
+                )
+            });
+            body.issues.push(issue.clone());
+        }
+        Ok(bodies.into_values().map(|(body, _)| body).collect())
+    }
+}
+
+fn invalid_mesh_range(face_index: usize) -> Error {
+    Error::Invalid {
+        offset: 0,
+        reason: format!("display mesh face {face_index} references missing triangles or vertices"),
+    }
 }
 
 /// Triangulate body-reachable faces, preserving per-face/body association.

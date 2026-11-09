@@ -123,6 +123,10 @@ component placement explicitly when building a viewer. The mesh API accepts
 absent/identity ASM body transforms; it skips faces under unverified nonidentity
 transforms rather than displaying geometry in a guessed location.
 The scene's animation ownership is separate from source placement recovery.
+`Document::brep_owners` returns all supported ownership bindings for a B-Rep
+stream. Each binding's `placement_candidates` lookup stays within its owning
+design segment: numeric component IDs from different segments are not joined.
+Multiple owners or occurrence candidates remain explicit ambiguity.
 
 ## Build display meshes
 
@@ -135,7 +139,10 @@ for document in file.documents() {
         // Native kernel units; Fusion normally uses centimetres.
         println!("{} triangles; {} faces skipped", mesh.triangles.len(), mesh.faces_skipped);
         // positions and triangles can become a Three.js BufferGeometry.
-        // mesh.faces associates triangle ranges with ASM body/face indices.
+        // Independently drawable bodies keep source face IDs and skipped faces.
+        for body in mesh.split_by_body()? {
+            println!("body {}: {} triangles", body.body_index, body.triangles.len());
+        }
         // Always surface mesh.issues to users when coverage is partial.
     }
 }
@@ -188,14 +195,6 @@ centroid deviation and winding, and planar face areas including holes.
 This is one real-model validation case, not a claim of compatibility with
 every Fusion release. New files should be admitted with explicit diagnostics
 and additional independent fixtures.
-
-## Machine support moved to machine-rs
-
-Use `machine::MachineDefinition` from [machine-rs](https://github.com/neofactory/machine-rs)
-in place of `f3d::machine::MachineDefinition`. The `machine` module,
-`Document::machines`, and the summary's `machines` count have been removed.
-Embedded `.mch` entries remain available as raw bytes through `Archive::bytes`;
-pass those bytes to `machine::MachineDefinition::parse` in applications that need both.
 
 ## License
 

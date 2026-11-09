@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  quality:
+    name: Rust quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Rust formatting and lint tools
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --check
+      - run: cargo +stable clippy --locked --all-targets -- -D warnings
+
+  tests:
+    name: Rust tests (${{ matrix.rust }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, "1.88.0"]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install "${{ matrix.rust }}" --profile minimal
+      - run: cargo +${{ matrix.rust }} test --locked --all-targets
+      - run: cargo +${{ matrix.rust }} test --locked --doc
+      - run: cargo +${{ matrix.rust }} doc --locked --no-deps
+
+  wasm:
+    name: WASM compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Rust and the browser target
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+      - run: cargo +stable check --locked --lib --target wasm32-unknown-unknown
+
+  ci:
+    name: CI
+    if: always()
+    needs: [quality, tests, wasm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, sys
+          jobs = json.loads(os.environ["JOB_RESULTS"])
+          failed = {name: job["result"] for name, job in jobs.items() if job["result"] != "success"}
+          if failed:
+              print(f"Required jobs did not pass: {failed}")
+              sys.exit(1)
+          print("All required checks passed.")
+          PYTHON

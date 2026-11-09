@@ -160,6 +160,9 @@ may be incomplete or nonwatertight.
 
 ## Validation
 
+Pull requests are checked by [GitHub Actions](.github/workflows/ci.yml).
+See [CI and repository rules](.github/README.md) for required checks and release-tag permissions.
+
 ```sh
 cargo test
 cargo clippy --all-targets -- -D warnings

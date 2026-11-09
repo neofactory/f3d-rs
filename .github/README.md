@@ -14,10 +14,11 @@ repository secret is needed for the automatic checks.
 ## Main branch
 
 `rulesets/main.json` is the configuration applied through GitHub's repository
-rulesets API. It requires a pull request, one approval, resolved review threads,
-and a passing **CI** check from GitHub Actions on an up-to-date branch. New
-commits dismiss stale approvals. Force pushes and deletion are blocked. No
-role has a configured bypass, including administrators.
+rulesets API. It requires a pull request, resolved review threads, and a passing
+**CI** check from GitHub Actions on an up-to-date branch. Approval is optional,
+so authors can merge their own pull requests once those requirements pass.
+New commits dismiss stale approvals. Force pushes and deletion are blocked.
+No role has a configured bypass, including administrators.
 
 ## Release tags
 

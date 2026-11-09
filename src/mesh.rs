@@ -21,7 +21,35 @@ use std::{
 };
 
 type Uv = [f64; 2];
-type FaceResult<T> = std::result::Result<T, String>;
+type FaceResult<T> = std::result::Result<T, FaceFailure>;
+
+#[derive(Debug)]
+struct FaceFailure {
+    kind: MeshIssueKind,
+    reason: String,
+}
+impl FaceFailure {
+    fn new(kind: MeshIssueKind, reason: impl Into<String>) -> Self {
+        Self {
+            kind,
+            reason: reason.into(),
+        }
+    }
+}
+impl From<&str> for FaceFailure {
+    fn from(reason: &str) -> Self {
+        Self::new(MeshIssueKind::InvalidTopology, reason)
+    }
+}
+impl From<Error> for FaceFailure {
+    fn from(error: Error) -> Self {
+        let kind = match error {
+            Error::UnsupportedGeometry { .. } => MeshIssueKind::UnsupportedGeometry,
+            _ => MeshIssueKind::InvalidGeometry,
+        };
+        Self::new(kind, error.to_string())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MeshOptions {
@@ -60,7 +88,20 @@ pub struct MeshedFace {
 pub struct MeshIssue {
     pub body_index: usize,
     pub face_index: usize,
+    pub kind: MeshIssueKind,
     pub reason: String,
+}
+/// A stable category for a skipped face, independent of its readable reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshIssueKind {
+    UnsupportedGeometry,
+    InvalidGeometry,
+    UnsupportedBodyTransform,
+    UnsupportedTopology,
+    InvalidTopology,
+    ResourceLimit,
+    Tessellation,
 }
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct MeshReport {
@@ -181,7 +222,10 @@ pub fn tessellate(model: &Model, options: &MeshOptions) -> Result<MeshReport> {
             let built = if body_supported {
                 tessellate_face(face, options)
             } else {
-                Err("nonidentity or unrecognized ASM body transform".into())
+                Err(FaceFailure::new(
+                    MeshIssueKind::UnsupportedBodyTransform,
+                    "nonidentity or unrecognized ASM body transform",
+                ))
             };
             match built {
                 Ok(mesh) => {
@@ -215,12 +259,13 @@ pub fn tessellate(model: &Model, options: &MeshOptions) -> Result<MeshReport> {
                     );
                     report.faces_meshed += 1;
                 }
-                Err(reason) => {
+                Err(failure) => {
                     report.faces_skipped += 1;
                     report.issues.push(MeshIssue {
                         body_index: body.index(),
                         face_index: face.index(),
-                        reason,
+                        kind: failure.kind,
+                        reason: failure.reason,
                     });
                 }
             }
@@ -258,8 +303,7 @@ fn edge_polyline(edge: Edge<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
         .end()
         .and_then(|v| v.position())
         .ok_or("missing edge end")?;
-    let curve = Curve::from_entity(edge.curve_entity().ok_or("missing boundary curve")?)
-        .map_err(|e| e.to_string())?;
+    let curve = Curve::from_entity(edge.curve_entity().ok_or("missing boundary curve")?)?;
     let [mut t0, mut t1] = edge.range().ok_or("missing boundary parameter range")?;
     if !edge.entity().sense() {
         t0 = -t0;
@@ -293,7 +337,10 @@ fn edge_polyline(edge: Edge<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
         }
     };
     if segments > options.max_edge_segments {
-        return Err("edge sampling exceeds segment limit".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::ResourceLimit,
+            "edge sampling exceeds segment limit",
+        ));
     }
     let mut points: Vec<_> = (0..=segments)
         .map(|i| curve.point_at(t0 + (t1 - t0) * i as f64 / segments as f64))
@@ -301,7 +348,10 @@ fn edge_polyline(edge: Edge<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
     points[0] = a;
     points[segments] = b;
     if points.iter().flatten().any(|p| !p.is_finite()) {
-        return Err("nonfinite boundary geometry".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::InvalidGeometry,
+            "nonfinite boundary geometry",
+        ));
     }
     Ok(points)
 }
@@ -328,7 +378,10 @@ fn ring_polyline(ring: Loop<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
         last = line.last().copied();
         line.pop();
         if points.len().saturating_add(line.len()) > options.max_face_vertices {
-            return Err("boundary exceeds face vertex limit".into());
+            return Err(FaceFailure::new(
+                MeshIssueKind::ResourceLimit,
+                "boundary exceeds face vertex limit",
+            ));
         }
         points.extend(line);
     }
@@ -443,15 +496,17 @@ struct FaceMesh {
 }
 
 fn tessellate_face(face: Face<'_>, options: &MeshOptions) -> FaceResult<FaceMesh> {
-    let surface = Surface::from_entity(face.surface_entity().ok_or("missing surface")?)
-        .map_err(|e| e.to_string())?;
+    let surface = Surface::from_entity(face.surface_entity().ok_or("missing surface")?)?;
     let rings: Vec<_> = face
         .loops()
         .into_iter()
         .map(|ring| ring_polyline(ring, options))
         .collect::<FaceResult<_>>()?;
     if rings.is_empty() {
-        return Err("no trimming loops (untrimmed analytic face unsupported)".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::UnsupportedTopology,
+            "no trimming loops (untrimmed analytic face unsupported)",
+        ));
     }
     let fit = options.tolerance.max(1e-4);
     for ring in &rings {
@@ -460,7 +515,10 @@ fn tessellate_face(face: Face<'_>, options: &MeshOptions) -> FaceResult<FaceMesh
             if !uv.iter().all(|v| v.is_finite())
                 || norm(sub(*p, surface.point_at(uv[0], uv[1]))) > fit
             {
-                return Err("boundary does not lie on the face surface".into());
+                return Err(FaceFailure::new(
+                    MeshIssueKind::InvalidGeometry,
+                    "boundary does not lie on the face surface",
+                ));
             }
         }
     }
@@ -469,7 +527,10 @@ fn tessellate_face(face: Face<'_>, options: &MeshOptions) -> FaceResult<FaceMesh
     let (points, parameters, triangles) = if wrapping {
         periodic_strip(&surface, &uvs, options)?
     } else if rings.len() > 1 && !matches!(surface, Surface::Plane { .. }) {
-        return Err("nonplanar face with holes needs constrained curved triangulation".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::UnsupportedTopology,
+            "nonplanar face with holes needs constrained curved triangulation",
+        ));
     } else if rings.len() == 1 && !matches!(surface, Surface::Plane { .. }) {
         if let Some(triangles) = monotone_triangles(&uvs[0]) {
             (rings[0].clone(), uvs[0].clone(), triangles)
@@ -491,7 +552,10 @@ fn tessellate_face(face: Face<'_>, options: &MeshOptions) -> FaceResult<FaceMesh
         }
     }
     if result.triangles.is_empty() {
-        return Err("triangulation produced no nondegenerate triangles".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::Tessellation,
+            "triangulation produced no nondegenerate triangles",
+        ));
     }
     Ok(result)
 }
@@ -584,8 +648,12 @@ fn polygon(surface: &Surface, rings: &[Vec<Vec3>], uvs: &[Vec<Uv>]) -> FaceResul
         );
     }
     let flattened: Vec<_> = uv.iter().flatten().copied().collect();
-    let indices =
-        earcutr::earcut(&flattened, &holes, 2).map_err(|e| format!("trim triangulation: {e}"))?;
+    let indices = earcutr::earcut(&flattened, &holes, 2).map_err(|e| {
+        FaceFailure::new(
+            MeshIssueKind::Tessellation,
+            format!("trim triangulation: {e}"),
+        )
+    })?;
     let triangles = indices.as_chunks::<3>().0.to_vec();
     let expected = signed_area(&uvs[outer]).abs()
         - order
@@ -598,7 +666,10 @@ fn polygon(surface: &Surface, rings: &[Vec<Vec3>], uvs: &[Vec<Uv>]) -> FaceResul
         .map(|t| triangle_area(uv[t[0]], uv[t[1]], uv[t[2]]).abs())
         .sum::<f64>();
     if expected <= 0. || (actual - expected).abs() > 1e-8 * expected.max(1.) {
-        return Err("triangulation does not preserve the trimmed region/holes".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::Tessellation,
+            "triangulation does not preserve the trimmed region/holes",
+        ));
     }
     Ok((points, uv, triangles))
 }
@@ -609,19 +680,28 @@ fn periodic_strip(
     options: &MeshOptions,
 ) -> FaceResult<Triangulation> {
     if rings.len() != 2 || !rings.iter().all(|ring| wraps(ring)) {
-        return Err("periodic face needs two complete boundary rings".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::UnsupportedTopology,
+            "periodic face needs two complete boundary rings",
+        ));
     }
     let mut heights = [0.; 2];
     for (i, ring) in rings.iter().enumerate() {
         heights[i] = ring.iter().map(|p| p[1]).sum::<f64>() / ring.len() as f64;
         if ring.iter().any(|p| (p[1] - heights[i]).abs() > 1e-6) {
-            return Err("periodic boundary with varying second parameter unsupported".into());
+            return Err(FaceFailure::new(
+                MeshIssueKind::UnsupportedTopology,
+                "periodic boundary with varying second parameter unsupported",
+            ));
         }
     }
     heights.sort_by(f64::total_cmp);
     let count = rings.iter().map(Vec::len).max().unwrap_or(3).max(12);
     if count > options.max_edge_segments {
-        return Err("periodic strip exceeds segment limit".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::ResourceLimit,
+            "periodic strip exceeds segment limit",
+        ));
     }
     let mut points = Vec::with_capacity((count + 1) * 2);
     let mut uv = Vec::with_capacity((count + 1) * 2);
@@ -681,11 +761,17 @@ fn refine(
         surface.point_at(centre_uv[0], centre_uv[1]),
     )));
     if !error.is_finite() {
-        return Err("nonfinite surface tessellation".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::InvalidGeometry,
+            "nonfinite surface tessellation",
+        ));
     }
     if error > options.tolerance && !matches!(surface, Surface::Plane { .. }) {
         if depth >= options.max_refinement_depth {
-            return Err("curved face exceeds tolerance at refinement limit".into());
+            return Err(FaceFailure::new(
+                MeshIssueKind::ResourceLimit,
+                "curved face exceeds tolerance at refinement limit",
+            ));
         }
         for (u, p) in [
             (
@@ -723,7 +809,10 @@ fn refine(
         || result.triangles.len().saturating_add(1)
             > options.max_triangles.min(options.max_face_triangles)
     {
-        return Err("face exceeds mesh resource limit".into());
+        return Err(FaceFailure::new(
+            MeshIssueKind::ResourceLimit,
+            "face exceeds mesh resource limit",
+        ));
     }
     let base = result.positions.len() as u32;
     result.positions.extend(xyz);
@@ -983,7 +1072,12 @@ mod tests {
         let report = tessellate(&model, &Default::default()).unwrap();
         assert!(report.positions.is_empty());
         assert_eq!(report.faces_skipped, 1);
+        assert_eq!(report.issues[0].kind, MeshIssueKind::UnsupportedGeometry);
         assert!(report.issues[0].reason.contains("spline"));
+        model.entities[4].types[0] = "plane".into();
+        model.entities[4].tokens.truncate(2);
+        let malformed = tessellate(&model, &Default::default()).unwrap();
+        assert_eq!(malformed.issues[0].kind, MeshIssueKind::InvalidGeometry);
         let report = tessellate(
             &plane_model(false),
             &MeshOptions {
@@ -993,6 +1087,7 @@ mod tests {
         )
         .unwrap();
         assert!(report.triangles.is_empty());
+        assert_eq!(report.issues[0].kind, MeshIssueKind::ResourceLimit);
         assert!(report.issues[0].reason.contains("resource limit"));
         assert!(
             tessellate(
@@ -1039,6 +1134,10 @@ mod tests {
         let report = tessellate(&model, &Default::default()).unwrap();
         assert_eq!(report.faces_skipped, 1);
         assert!(report.positions.is_empty());
+        assert_eq!(
+            report.issues[0].kind,
+            MeshIssueKind::UnsupportedBodyTransform
+        );
         assert!(report.issues[0].reason.contains("transform"));
     }
 }

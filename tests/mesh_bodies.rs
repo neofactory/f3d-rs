@@ -1,4 +1,4 @@
-use f3d::mesh::{MeshIssue, MeshReport, MeshedFace};
+use f3d::mesh::{MeshIssue, MeshIssueKind, MeshReport, MeshedFace};
 
 fn report() -> MeshReport {
     MeshReport {
@@ -30,11 +30,13 @@ fn report() -> MeshReport {
             MeshIssue {
                 body_index: 8,
                 face_index: 14,
+                kind: MeshIssueKind::UnsupportedTopology,
                 reason: "unsupported trim".into(),
             },
             MeshIssue {
                 body_index: 20,
                 face_index: 15,
+                kind: MeshIssueKind::UnsupportedGeometry,
                 reason: "unsupported surface".into(),
             },
         ],

@@ -92,6 +92,39 @@ fn asm_32_and_64_bit_fields_and_geometry() {
         assert_eq!(curve.invert([1., 4., 3.]), 2.);
     }
 }
+
+#[test]
+fn unsupported_geometry_is_distinct_from_malformed_geometry() {
+    use f3d::geometry::{Curve, GeometryKind, Surface};
+    for (base, geometry) in [
+        ("curve", GeometryKind::Curve),
+        ("surface", GeometryKind::Surface),
+    ] {
+        let mut bytes = header(4);
+        types(&["vendor-spline", base], &mut bytes);
+        bytes.push(tag::RECORD_END);
+        finish(&mut bytes);
+        let model = asm::Model::parse(&bytes).unwrap();
+        let entity = &model.entities[0];
+        let error = match geometry {
+            GeometryKind::Curve => Curve::from_entity(entity).unwrap_err(),
+            GeometryKind::Surface => Surface::from_entity(entity).unwrap_err(),
+        };
+        assert!(
+            matches!(error, Error::UnsupportedGeometry { geometry: kind, entity_index: 0, source_kind } if kind == geometry && source_kind == "vendor-spline")
+        );
+        assert_eq!(entity.name(), "vendor-spline");
+        assert!(!entity.tokens.is_empty());
+    }
+    let mut bytes = header(4);
+    types(&["straight", "curve"], &mut bytes);
+    bytes.push(tag::RECORD_END);
+    finish(&mut bytes);
+    let model = asm::Model::parse(&bytes).unwrap();
+    assert!(
+        matches!(Curve::from_entity(&model.entities[0]), Err(Error::MalformedGeometry { entity_index: 0, source_kind, .. }) if source_kind == "straight")
+    );
+}
 #[test]
 fn every_truncated_prefix_fails_without_panicking() {
     let data = sample(8);

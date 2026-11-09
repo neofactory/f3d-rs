@@ -517,10 +517,17 @@ pub fn scan_strings(data: &[u8]) -> Vec<FoundString> {
         if (3..=512).contains(&n) {
             if let Some(raw) = data.get(pos + 4..pos + 4 + n * 2)
                 && raw
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .all(|b| b[1] == 0 && b[0] >= 32 && b[0] != 127)
             {
-                let value = raw.chunks_exact(2).map(|b| char::from(b[0])).collect();
+                let value = raw
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| char::from(b[0]))
+                    .collect();
                 out.push(FoundString {
                     offset: pos,
                     wide: true,

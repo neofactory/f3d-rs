@@ -104,8 +104,10 @@ impl<'a> Reader<'a> {
         }
         let words: Vec<_> = self
             .take(bytes)?
-            .chunks_exact(2)
-            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u16::from_le_bytes(*b))
             .collect();
         String::from_utf16(&words).map_err(|e| self.invalid(e.to_string()))
     }

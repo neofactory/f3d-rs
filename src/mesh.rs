@@ -586,10 +586,7 @@ fn polygon(surface: &Surface, rings: &[Vec<Vec3>], uvs: &[Vec<Uv>]) -> FaceResul
     let flattened: Vec<_> = uv.iter().flatten().copied().collect();
     let indices =
         earcutr::earcut(&flattened, &holes, 2).map_err(|e| format!("trim triangulation: {e}"))?;
-    let triangles: Vec<_> = indices
-        .chunks_exact(3)
-        .map(|t| [t[0], t[1], t[2]])
-        .collect();
+    let triangles = indices.as_chunks::<3>().0.to_vec();
     let expected = signed_area(&uvs[outer]).abs()
         - order
             .iter()

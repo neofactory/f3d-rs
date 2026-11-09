@@ -52,6 +52,20 @@ mod error {
         Limit(String),
         #[error("unsupported: {0}")]
         Unsupported(String),
+        #[error(
+            "unsupported {geometry:?} {source_kind:?} at entity {entity_index}; inspect its retained tokens"
+        )]
+        UnsupportedGeometry {
+            geometry: crate::geometry::GeometryKind,
+            entity_index: usize,
+            source_kind: String,
+        },
+        #[error("malformed geometry {source_kind:?} at entity {entity_index}: {reason}")]
+        MalformedGeometry {
+            entity_index: usize,
+            source_kind: String,
+            reason: String,
+        },
         #[error("entry not found: {0}")]
         MissingEntry(String),
         #[error("{path}: {source}")]

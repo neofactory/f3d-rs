@@ -158,6 +158,17 @@ trims, and faces exceeding the refinement limits are explicitly skipped.
 There are no substitute boxes or filled-in holes. Output is for display and
 may be incomplete or nonwatertight.
 
+Geometry decoding distinguishes `Error::UnsupportedGeometry` from
+`Error::MalformedGeometry`. Both identify the source entity and its original
+kind; unsupported geometry also identifies whether a curve or surface was
+requested. Original ASM tokens remain available. Binary file errors retain
+their existing `Invalid`, `Truncated`, ZIP, and entry-path variants.
+
+Each skipped face has a `MeshIssueKind` alongside its readable `reason`, so
+callers can distinguish unsupported geometry or topology, malformed geometry
+or topology, unsupported body transforms, resource limits, and tessellation
+failures without interpreting message text. The kind is serialized in mesh JSON.
+
 ## Validation
 
 Pull requests are checked by [GitHub Actions](.github/workflows/ci.yml).

@@ -7,10 +7,19 @@ use crate::{
 };
 use serde::Serialize;
 
-fn invalid(kind: &str) -> Error {
-    Error::Invalid {
-        offset: 0,
-        reason: format!("incomplete or degenerate {kind} geometry"),
+/// The geometry operation that could not decode an ASM entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometryKind {
+    Curve,
+    Surface,
+}
+
+fn invalid(entity: &Entity) -> Error {
+    Error::MalformedGeometry {
+        entity_index: entity.index,
+        source_kind: entity.name().to_owned(),
+        reason: "incomplete or degenerate geometry".into(),
     }
 }
 fn unpack(e: &Entity) -> (Vec<Vec3>, Vec<Vec3>, Vec<f64>) {
@@ -39,30 +48,33 @@ impl Curve {
     pub fn from_entity(e: &Entity) -> Result<Self> {
         let (p, d, r) = unpack(e);
         let kind = e.name();
-        let getp = |i: usize| p.get(i).copied().ok_or_else(|| invalid(kind));
-        let getd = |i: usize| d.get(i).copied().ok_or_else(|| invalid(kind));
-        let getr = |i: usize| r.get(i).copied().ok_or_else(|| invalid(kind));
+        let getp = |i: usize| p.get(i).copied().ok_or_else(|| invalid(e));
+        let getd = |i: usize| d.get(i).copied().ok_or_else(|| invalid(e));
+        let getr = |i: usize| r.get(i).copied().ok_or_else(|| invalid(e));
+        let normalize = |v| unit(v).map_err(|_| invalid(e));
         match kind {
             "straight" => Ok(Self::Straight {
                 root: getp(0)?,
-                direction: unit(getd(0)?)?,
+                direction: normalize(getd(0)?)?,
             }),
             "ellipse" => {
                 let major = getd(1)?;
                 let ratio = getr(0)?;
                 if norm(major) == 0. || !ratio.is_finite() || ratio <= 0. {
-                    return Err(invalid(kind));
+                    return Err(invalid(e));
                 }
                 Ok(Self::Ellipse {
                     centre: getp(0)?,
-                    normal: unit(getd(0)?)?,
+                    normal: normalize(getd(0)?)?,
                     major,
                     ratio,
                 })
             }
-            _ => Err(Error::Unsupported(format!(
-                "curve {kind:?}; inspect its retained tokens"
-            ))),
+            _ => Err(Error::UnsupportedGeometry {
+                geometry: GeometryKind::Curve,
+                entity_index: e.index,
+                source_kind: kind.to_owned(),
+            }),
         }
     }
     pub fn point_at(&self, t: f64) -> Vec3 {
@@ -133,24 +145,25 @@ impl Surface {
     pub fn from_entity(e: &Entity) -> Result<Self> {
         let (p, d, r) = unpack(e);
         let kind = e.name();
-        let getp = |i: usize| p.get(i).copied().ok_or_else(|| invalid(kind));
-        let getd = |i: usize| d.get(i).copied().ok_or_else(|| invalid(kind));
-        let getr = |i: usize| r.get(i).copied().ok_or_else(|| invalid(kind));
+        let getp = |i: usize| p.get(i).copied().ok_or_else(|| invalid(e));
+        let getd = |i: usize| d.get(i).copied().ok_or_else(|| invalid(e));
+        let getr = |i: usize| r.get(i).copied().ok_or_else(|| invalid(e));
+        let normalize = |v| unit(v).map_err(|_| invalid(e));
         match kind {
             "plane" => Ok(Self::Plane {
                 origin: getp(0)?,
-                normal: unit(getd(0)?)?,
-                u_dir: unit(getd(1)?)?,
+                normal: normalize(getd(0)?)?,
+                u_dir: normalize(getd(1)?)?,
             }),
             "cone" => {
                 let major = getd(1)?;
                 let cos_angle = getr(2)?;
                 if norm(major) == 0. || cos_angle == 0. {
-                    return Err(invalid(kind));
+                    return Err(invalid(e));
                 }
                 Ok(Self::Cone {
                     base: getp(0)?,
-                    axis: unit(getd(0)?)?,
+                    axis: normalize(getd(0)?)?,
                     major,
                     ratio: getr(0)?,
                     sin_angle: getr(1)?,
@@ -160,19 +173,21 @@ impl Surface {
             "sphere" => Ok(Self::Sphere {
                 centre: getp(0)?,
                 radius: getr(0)?,
-                pole: unit(getd(0)?)?,
-                u_ref: unit(getd(1)?)?,
+                pole: normalize(getd(0)?)?,
+                u_ref: normalize(getd(1)?)?,
             }),
             "torus" => Ok(Self::Torus {
                 centre: getp(0)?,
-                axis: unit(getd(0)?)?,
+                axis: normalize(getd(0)?)?,
                 major_radius: getr(0)?,
                 minor_radius: getr(1)?,
-                u_ref: unit(getd(1)?)?,
+                u_ref: normalize(getd(1)?)?,
             }),
-            _ => Err(Error::Unsupported(format!(
-                "surface {kind:?}; inspect its retained tokens"
-            ))),
+            _ => Err(Error::UnsupportedGeometry {
+                geometry: GeometryKind::Surface,
+                entity_index: e.index,
+                source_kind: kind.to_owned(),
+            }),
         }
     }
     pub fn point_at(&self, u: f64, v: f64) -> Vec3 {

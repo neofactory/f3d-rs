@@ -1,8 +1,8 @@
 //! Native, read-only Fusion archive reader. No Python or Fusion runtime required.
 //!
 //! ASM entities retain every token, including unsupported spline definitions.
-//! Analytic geometry has typed evaluation; this crate does not tessellate faces
-//! or regenerate the parametric timeline. See `README.md` for the support scope.
+//! Analytic geometry has typed evaluation and bounded, partial face tessellation.
+//! The crate does not regenerate the parametric timeline. See `README.md`.
 //!
 //! ```no_run
 //! let file = f3d::FusionFile::open("model.f3d")?;
@@ -25,6 +25,7 @@ mod binary;
 pub mod document;
 pub mod geometry;
 pub mod math;
+pub mod mesh;
 pub mod streams;
 
 pub use document::{Document, FusionFile};

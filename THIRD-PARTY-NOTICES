@@ -11,7 +11,8 @@ LICENSE-MIT-ezf3d. Retain that file when distributing substantial portions of
 the adapted implementation.
 
 Adapted areas include ASM header/token framing and analytic geometry layouts,
-B-Rep pointer slots, and Fusion Meta/Bulk stream framing. The Rust reader uses
+B-Rep pointer slots, analytic edge sampling, surface inversion, periodic-strip
+and monotone-chain tessellation, and Fusion Meta/Bulk stream framing. The Rust reader uses
 checked reads, explicit resource limits, section-local ASM pointer indices,
 and direct snapshot/body-container component links. It does not embed or call
 the Python implementation at runtime.

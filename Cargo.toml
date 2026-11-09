@@ -12,12 +12,18 @@ exclude = ["validation-output/**", "target/**"]
 name = "f3d"
 
 [dependencies]
+earcutr = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
-zip = { version = "9.4.2", default-features = false, features = ["deflate-flate2-zlib-rs", "zstd"] }
+zip = { version = "9.4.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+ruzstd = "0.9.1"
+crc32fast = "1.5"
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Native test fixtures use the reference encoder. Library builds and browser
+# builds use only pure-Rust decompression.
+zip = { version = "9.4.2", default-features = false, features = ["zstd"] }
 zstd = "0.14.3"
 
 [lints.rust]

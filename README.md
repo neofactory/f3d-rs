@@ -73,6 +73,7 @@ one flattened assembly.
 cargo run -q --example inspect -- model.f3d
 cargo run -q --example inspect -- model.f3d --summary-json
 cargo run -q --example inspect -- model.f3d --json > decoded.json
+cargo run --release --example mesh -- model.f3d --json > mesh.json
 ```
 
 ## Implemented reading scope
@@ -87,14 +88,15 @@ cargo run -q --example inspect -- model.f3d --json > decoded.json
 | Topology | Body/lump/shell/face/loop/coedge/edge/vertex traversal, tolerant subclasses, cycle guards, live face/edge sets |
 | Analytic curves | Straight lines and ellipses, evaluation and parameter inversion |
 | Analytic surfaces | Planes, cones/cylinders, spheres, signed-radius tori; point evaluation |
+| Display meshes | Trimmed analytic faces, planar holes, periodic bands, per-face/body triangle ranges, explicit skipped-face diagnostics |
 | Splines | Entire token records retained; typed NURBS extraction/evaluation not implemented |
 | Components | Names and snapshot body-map/container/component links with reciprocal owner checks |
 | Placements | Unique rigid-matrix candidates from registered occurrence records; **not a full occurrence-schema decoder** |
 | Other assets | Exact raw previews, materials, CAM XML, and unknown binary payloads available through the archive API |
 
-No tessellation, mesh export, graphics-cache decoder, parametric timeline
-execution, sketch solver, face triangulation, CAD-kernel operations, or F3D
-writer is included. Reading a complete ASM token stream does not certify
+No standard mesh-file exporter, graphics-cache decoder, parametric timeline
+execution, sketch solver, CAD-kernel operations, or F3D writer is included.
+Reading a complete ASM token stream does not certify
 surface validity or a closed manifold.
 
 Snapshot ownership decoding currently covers the envelope exercised by the
@@ -117,8 +119,37 @@ Diagnostic JSON encodes nonfinite ASM reals as `"f64:0x<IEEE-754 bits>"` so
 NaN payloads and infinite sentinels are retained. Finite values stay numbers.
 
 Geometry is not automatically placed by assembly occurrences. Apply a verified
-component placement and any body transform explicitly when building a viewer.
+component placement explicitly when building a viewer. The mesh API accepts
+absent/identity ASM body transforms; it skips faces under unverified nonidentity
+transforms rather than displaying geometry in a guessed location.
 The scene's animation ownership is separate from source placement recovery.
+
+## Build display meshes
+
+```rust,no_run
+# fn main() -> f3d::Result<()> {
+# let file = f3d::FusionFile::open("model.f3d")?;
+for document in file.documents() {
+    for brep in &document.breps {
+        let mesh = f3d::mesh::tessellate(&brep.model, &Default::default())?;
+        // Native kernel units; Fusion normally uses centimetres.
+        println!("{} triangles; {} faces skipped", mesh.triangles.len(), mesh.faces_skipped);
+        // positions and triangles can become a Three.js BufferGeometry.
+        // mesh.faces associates triangle ranges with ASM body/face indices.
+        // Always surface mesh.issues to users when coverage is partial.
+    }
+}
+# Ok(())
+# }
+```
+
+The default chord tolerance is 0.01 cm (0.1 mm for Fusion). `MeshOptions`
+bounds edge sampling, boundary sizes, refinement depth, per-face triangles,
+and total output vertices/triangles. Spline surfaces and spline boundary
+curves remain unsupported. Nonplanar faces with holes, complicated periodic
+trims, and faces exceeding the refinement limits are explicitly skipped.
+There are no substitute boxes or filled-in holes. Output is for display and
+may be incomplete or nonwatertight.
 
 ## Validation
 
@@ -139,6 +170,7 @@ ezf3d. This dependency is for development only:
 
 ```sh
 python tools/compare_ezf3d.py /path/to/model.f3d
+python tools/check_mesh.py /path/to/model.f3d
 ```
 
 For the Brother U500Xd2, the comparison checks every token in 10 B-Rep streams,
@@ -147,6 +179,11 @@ topology, 7,510 analytic curve evaluations, and 2,749 surface evaluations.
 The expected live face count is 3,060. When the earlier viewer audit is beside
 the source file, all 10 component links and neutral placement matrices are
 also checked. `validation-output/comparison.json` records the local result.
+
+The native display mesh for that same input contains 47,788 triangles from
+2,646 of 3,060 faces (86.5% coverage) at the default tolerance. The optional
+mesh checker independently checks vertices against ezf3d's surfaces, triangle
+centroid deviation and winding, and planar face areas including holes.
 
 This is one real-model validation case, not a claim of compatibility with
 every Fusion release. New files should be admitted with explicit diagnostics

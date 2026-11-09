@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::{Read, Seek},
+    io::{Cursor, Read, Seek},
     path::Path,
 };
 
@@ -47,7 +47,18 @@ impl Archive {
         let mut entries = Vec::new();
         let mut by_name = BTreeMap::new();
         for i in 0..zip.len() {
-            let mut file = zip.by_index(i)?;
+            let method = zip.by_index_data(i)?.compression();
+            let mut file = if method == zip::CompressionMethod::ZSTD {
+                zip.by_index_raw(i)?
+            } else {
+                zip.by_index(i)?
+            };
+            if file.encrypted() {
+                return Err(Error::Invalid {
+                    offset: 0,
+                    reason: "encrypted ZIP entries are unsupported".into(),
+                });
+            }
             if file.is_dir() {
                 continue;
             }
@@ -78,15 +89,29 @@ impl Archive {
                 name: name.clone(),
                 size,
                 compressed_size: file.compressed_size(),
-                compression: format!("{:?}", file.compression()),
+                compression: if method == zip::CompressionMethod::ZSTD {
+                    "Zstd".into()
+                } else {
+                    format!("{method:?}")
+                },
                 crc32: file.crc32(),
                 data: Vec::new(),
             };
             // Read to EOF to make the ZIP reader verify the CRC. The extra byte
             // also rejects a stream that expands past its advertised size.
-            file.by_ref()
-                .take(size.saturating_add(1))
-                .read_to_end(&mut entry.data)?;
+            if method == zip::CompressionMethod::ZSTD {
+                read_zstd(&mut file, size, &mut entry.data)?;
+                if crc32fast::hash(&entry.data) != entry.crc32 {
+                    return Err(Error::Invalid {
+                        offset: 0,
+                        reason: format!("CRC mismatch in {name:?}"),
+                    });
+                }
+            } else {
+                file.by_ref()
+                    .take(size.saturating_add(1))
+                    .read_to_end(&mut entry.data)?;
+            }
             if entry.data.len() as u64 != size {
                 return Err(Error::Invalid {
                     offset: 0,
@@ -110,4 +135,40 @@ impl Archive {
     pub fn total_bytes(&self) -> u64 {
         self.entries.iter().map(|e| e.size).sum()
     }
+}
+
+// StreamingDecoder decodes one frame at a time. Fusion ZIP entries can contain
+// concatenated frames, so preserve the underlying stream and start a new decoder
+// until the compressed entry is exhausted. The ZIP CRC covers all frames.
+fn read_zstd(reader: &mut impl Read, size: u64, output: &mut Vec<u8>) -> Result<()> {
+    loop {
+        let mut magic = [0; 4];
+        if reader.read(&mut magic[..1])? == 0 {
+            break;
+        }
+        reader.read_exact(&mut magic[1..])?;
+        let magic_value = u32::from_le_bytes(magic);
+        if (0x184d2a50..=0x184d2a5f).contains(&magic_value) {
+            let mut length = [0; 4];
+            reader.read_exact(&mut length)?;
+            let length = u32::from_le_bytes(length) as u64;
+            let skipped = std::io::copy(&mut reader.by_ref().take(length), &mut std::io::sink())?;
+            if skipped != length {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+            }
+            continue;
+        }
+        let source = Cursor::new(magic).chain(&mut *reader);
+        let mut decoder =
+            ruzstd::decoding::StreamingDecoder::new(source).map_err(std::io::Error::other)?;
+        let remaining = size.saturating_add(1).saturating_sub(output.len() as u64);
+        decoder.by_ref().take(remaining).read_to_end(output)?;
+        if output.len() as u64 > size {
+            return Err(Error::Invalid {
+                offset: 0,
+                reason: "Zstandard stream exceeds advertised ZIP size".into(),
+            });
+        }
+    }
+    Ok(())
 }

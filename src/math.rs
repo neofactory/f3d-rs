@@ -88,8 +88,8 @@ impl Mat4 {
         if !self.0.iter().flatten().all(|x| x.is_finite()) {
             return false;
         }
-        for i in 0..4 {
-            if (self.0[3][i] - Self::IDENTITY.0[3][i]).abs() > tolerance {
+        for (value, expected) in self.0[3].iter().zip(Self::IDENTITY.0[3]) {
+            if (value - expected).abs() > tolerance {
                 return false;
             }
         }

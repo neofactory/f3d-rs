@@ -1,7 +1,7 @@
 """Optional development check: Python ezf3d versus the independent Rust reader.
 
-Run with a Python environment that contains ezf3d, e.g.:
-  ../outputs/brother-u500xd2-fusion/tools/venv/bin/python tools/compare_ezf3d.py MODEL
+Set up the Python 3.13 reference environment as described in docs/validation.md, then:
+  .venv-validation/bin/python tools/compare_ezf3d.py /path/to/model.f3d
 No source models are copied into this crate.
 """
 import json

@@ -1,0 +1,3 @@
+# Development-only reference implementation; revision matches THIRD-PARTY-NOTICES.
+ezf3d @ git+https://github.com/AlexSabaka/ezf3d.git@97fe90ab8c39c3978fa6354f4a21c5ebdbc38c6e
+numpy==2.2.6

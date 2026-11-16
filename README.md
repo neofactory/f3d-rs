@@ -186,23 +186,49 @@ history pointer addressing, cyclic topology, all three ZIP compression types,
 multi-frame Zstandard, CRC failures, resource limits, F3Z nesting, native
 object indexing, and preservation of embedded assets.
 
-The optional Python differential checker requires an environment containing
-ezf3d. This dependency is for development only:
+### Optional reference checks
+
+The Python differential checkers require **Python 3.13**, Git, and the Rust
+toolchain. The pinned ezf3d revision requires Python `>=3.13,<3.14`.
+Neither Python nor ezf3d is needed to build or use the Rust library or run its
+synthetic tests. From the repository root, create an isolated environment:
 
 ```sh
-python tools/compare_ezf3d.py /path/to/model.f3d
-python tools/check_mesh.py /path/to/model.f3d
+python3.13 -m venv .venv-validation
+.venv-validation/bin/python -m pip install -r tools/requirements-validation.txt
+.venv-validation/bin/python -m pip check
+.venv-validation/bin/python tools/compare_ezf3d.py /path/to/model.f3d
+.venv-validation/bin/python tools/check_mesh.py /path/to/model.f3d
 ```
 
-For the Brother U500Xd2, the comparison checks every token in 10 B-Rep streams,
+On Windows, use `py -3.13 -m venv .venv-validation` and replace
+`.venv-validation/bin/python` with `.venv-validation\Scripts\python.exe`.
+The requirements pin the ezf3d source revision recorded in
+`THIRD-PARTY-NOTICES` and NumPy; ezf3d's other dependencies are resolved by pip.
+
+Supply your own F3D input. The tools write decoded data and reports under the
+ignored `validation-output/` directory; the environment is also ignored.
+Keep private source models outside the repository. These optional checks are
+not part of CI and do not require the private validation model described below.
+
+### Recorded validation on a private model
+
+The following results were recorded locally using a **private Brother U500Xd2
+model**. The source CAD, recovered viewer audit, and generated reports are not
+distributed with this repository, so these figures are not a bundled,
+independently reproducible benchmark.
+
+That comparison checked every token in 10 B-Rep streams,
 57,837 entities, and 729,612 tokens, plus entity counts, vertex bounds, live
 topology, 7,510 analytic curve evaluations, and 2,749 surface evaluations.
-The expected live face count is 3,060. When the earlier viewer audit is beside
-the source file, all 10 component links and neutral placement matrices are
-also checked. `validation-output/comparison.json` records the local result.
+The live face count was 3,060. All 10 component links and neutral placement
+matrices were also checked against the private recovered viewer audit.
+The comparison tool performs this additional check only when
+`recovered/component-mapping.json` exists beside the input model.
+`validation-output/comparison.json` records each local run's result.
 
-The native display mesh for that same input contains 47,788 triangles from
-2,646 of 3,060 faces (86.5% coverage) at the default tolerance. The optional
+The recorded native display mesh for that same input contained 47,788 triangles
+from 2,646 of 3,060 faces (86.5% coverage) at the default tolerance. The optional
 mesh checker independently checks vertices against ezf3d's surfaces, triangle
 centroid deviation and winding, and planar face areas including holes.
 

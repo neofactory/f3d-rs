@@ -1,6 +1,6 @@
 """Check native display meshes against independent ezf3d analytic geometry.
 
-Development only: use the Python 3.13 reference environment from README.md.
+Development only: use the Python 3.13 reference environment from docs/validation.md.
   .venv-validation/bin/python tools/check_mesh.py /path/to/model.f3d
 Does not copy source CAD.
 """

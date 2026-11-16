@@ -1,7 +1,7 @@
 # Development and validation
 
 Pull requests are checked by [GitHub Actions](../.github/workflows/ci.yml).
-See [CI and repository rules](../.github/README.md) for required checks and release-tag permissions.
+See [CI and repository rules](../.github/CONTRIBUTING-CI.md) for required checks and release-tag permissions.
 
 ```sh
 cargo test

@@ -1,5 +1,6 @@
 //! Analytic geometry in the native ASM coordinate unit. Unsupported geometry
 //! returns an explicit error; all original tokens remain available on Entity.
+use crate::spline::{GeometryContext, Spline};
 use crate::{
     Error, Result,
     asm::Entity,
@@ -33,6 +34,7 @@ fn unpack(e: &Entity) -> (Vec<Vec3>, Vec<Vec3>, Vec<f64>) {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Curve {
+    Spline(Spline),
     Straight {
         root: Vec3,
         direction: Vec3,
@@ -45,7 +47,21 @@ pub enum Curve {
     },
 }
 impl Curve {
+    pub fn from_context<'a>(e: &'a Entity, context: &GeometryContext<'a>) -> Result<Self> {
+        if e.name() == "intcurve" {
+            return spline_payload(context.payload(e)?, false).map(Self::Spline);
+        }
+        Self::from_entity(e)
+    }
     pub fn from_entity(e: &Entity) -> Result<Self> {
+        if e.name() == "intcurve" {
+            let index = e
+                .tokens
+                .iter()
+                .position(|t| t.tag == 15)
+                .ok_or_else(|| invalid(e))?;
+            return spline_payload(&e.tokens[index + 1..], false).map(Self::Spline);
+        }
         let (p, d, r) = unpack(e);
         let kind = e.name();
         let getp = |i: usize| p.get(i).copied().ok_or_else(|| invalid(e));
@@ -79,6 +95,7 @@ impl Curve {
     }
     pub fn point_at(&self, t: f64) -> Vec3 {
         match *self {
+            Self::Spline(ref s) => s.point(t, 0.),
             Self::Straight { root, direction } => add(root, scale(direction, t)),
             Self::Ellipse {
                 centre,
@@ -96,6 +113,7 @@ impl Curve {
     }
     pub fn invert(&self, point: Vec3) -> f64 {
         match *self {
+            Self::Spline(ref s) => s.invert(point)[0],
             Self::Straight { root, direction } => dot(sub(point, root), direction),
             Self::Ellipse {
                 centre,
@@ -114,6 +132,7 @@ impl Curve {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Surface {
+    Spline(Spline),
     Plane {
         origin: Vec3,
         normal: Vec3,
@@ -142,7 +161,21 @@ pub enum Surface {
     },
 }
 impl Surface {
+    pub fn from_context<'a>(e: &'a Entity, context: &GeometryContext<'a>) -> Result<Self> {
+        if e.name() == "spline" {
+            return spline_payload(context.payload(e)?, true).map(Self::Spline);
+        }
+        Self::from_entity(e)
+    }
     pub fn from_entity(e: &Entity) -> Result<Self> {
+        if e.name() == "spline" {
+            let index = e
+                .tokens
+                .iter()
+                .position(|t| t.tag == 15)
+                .ok_or_else(|| invalid(e))?;
+            return spline_payload(&e.tokens[index + 1..], true).map(Self::Spline);
+        }
         let (p, d, r) = unpack(e);
         let kind = e.name();
         let getp = |i: usize| p.get(i).copied().ok_or_else(|| invalid(e));
@@ -192,6 +225,7 @@ impl Surface {
     }
     pub fn point_at(&self, u: f64, v: f64) -> Vec3 {
         match *self {
+            Self::Spline(ref s) => s.point(u, v),
             Self::Plane {
                 origin,
                 normal,
@@ -244,4 +278,26 @@ impl Surface {
             }
         }
     }
+}
+
+fn spline_payload(tokens: &[crate::asm::Token], surface: bool) -> Result<Spline> {
+    use crate::asm::Value;
+    let mut depth = 0;
+    for (i, t) in tokens.iter().enumerate() {
+        if t.tag == 15 {
+            depth += 1;
+        } else if t.tag == 16 {
+            if depth == 0 {
+                break;
+            }
+            depth -= 1;
+        }
+        if depth == 0 && matches!(&t.value,Value::Text(s) if s=="nubs" || s=="nurbs") {
+            return Spline::parse(&tokens[i..], surface);
+        }
+    }
+    Err(Error::Invalid {
+        offset: 0,
+        reason: "explicit spline payload unavailable".into(),
+    })
 }

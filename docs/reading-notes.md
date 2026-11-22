@@ -15,7 +15,7 @@ reader and mesh output. Start with the [README](../README.md) for usage.
 | Topology | Body/lump/shell/face/loop/coedge/edge/vertex traversal, tolerant subclasses, cycle guards, live face/edge sets |
 | Analytic curves | Straight lines and ellipses, evaluation and parameter inversion |
 | Analytic surfaces | Planes, cones/cylinders, spheres, signed-radius tori; point evaluation |
-| Display meshes | Trimmed analytic faces, planar holes, periodic bands, per-face/body triangle ranges, explicit skipped-face diagnostics |
+| Display meshes | Trimmed analytic and explicit spline faces, holes, periodic bands, per-face/body triangle ranges, explicit skipped-face diagnostics |
 | Splines | Entire token records retained; typed NURBS extraction/evaluation not implemented |
 | Components | Names and snapshot body-map/container/component links with reciprocal owner checks |
 | Placements | Unique rigid-matrix candidates from registered occurrence records; **not a full occurrence-schema decoder** |
@@ -58,9 +58,12 @@ Multiple owners or occurrence candidates remain explicit ambiguity.
 
 The default chord tolerance is 0.01 cm (0.1 mm for Fusion). `MeshOptions`
 bounds edge sampling, boundary sizes, refinement depth, per-face triangles,
-and total output vertices/triangles. Spline surfaces and spline boundary
-curves remain unsupported. Nonplanar faces with holes, complicated periodic
-trims, and faces exceeding the refinement limits are explicitly skipped.
+and total output vertices/triangles. Explicit ASM NUBS/NURBS curves and tensor
+surfaces are evaluated from their control points and knots, including shared
+subtype references. Adaptive sampling preserves the requested chord tolerance.
+Periodic cylindrical/conical/torus strips retain varying boundaries and holes;
+spherical pole trims retain their neighboring longitudes. Unknown spline
+representations, unsupported trims, and faces exceeding limits are skipped.
 There are no substitute boxes or filled-in holes. Output is for display and
 may be incomplete or nonwatertight.
 

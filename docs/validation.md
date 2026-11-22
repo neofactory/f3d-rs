@@ -64,3 +64,21 @@ centroid deviation and winding, and planar face areas including holes.
 This is one real-model validation case, not a claim of compatibility with
 every Fusion release. New files should be admitted with explicit diagnostics
 and additional independent fixtures.
+
+## Autodesk Brother source regression
+
+The explicit spline and trim implementation was also checked against Autodesk's
+Brother U500Xd2 F3D (SHA-256
+`6031fdce96f223ca1d0b838d73e560e1744ca31ec81516393b30107257169397`).
+At the default 0.01 cm chord tolerance, all 3,060 source faces mesh without
+skipped-face diagnostics. This supersedes the historical mesh coverage above;
+it is a face-coverage check, not a watertightness or manufacturing certification.
+The source is downloaded separately and is not included in Git.
+
+```sh
+F3D_BROTHER_MODEL=/path/to/brother.f3d cargo test --release --test autodesk -- --ignored
+```
+
+Synthetic tests cover rational curve evaluation/inversion, tensor control order,
+malformed spline payloads, periodic curve wrapping, variable-height periodic
+trims with holes, and torus minor-period trims.

@@ -89,7 +89,13 @@ of a ball with a vertex at the sphere's pole, a barrel cut from a sphere, and a
 pipe elbow cut from a torus) must each mesh closed with a volume just under the
 exact one.
 
-`tools/check_mesh.py` compares triangle winding with the face `sense` flag and
-ezf3d's surface normal. It has not been run against meshes wound by boundary
-direction; on the Autodesk Brother source it is expected to object to the one
-face that lies inside the spindle of a self-intersecting torus.
+`tools/check_mesh.py` stops at its first failed check on the Autodesk Brother
+source, with or without closed meshes: its reference does not evaluate spline
+surfaces (311 faces), and 48 planar faces differ in area from the reference
+tessellation. Run check by check, closed meshes change two things. The corner
+test (within 0.0001 cm of the surface) fails on 23 more conical faces, by up to
+0.0003 cm: a boundary vertex is now the edge sample that both faces share,
+where a periodic band used to put a copy of its own on its surface. The winding
+test, which uses the face `sense` flag and ezf3d's surface normal, fails on the
+one face that lies inside the spindle of a self-intersecting torus. No face
+gains a centroid-deviation or planar-area failure.

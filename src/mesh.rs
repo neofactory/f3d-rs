@@ -68,7 +68,7 @@ impl Default for MeshOptions {
             tolerance: 0.01,
             max_edge_segments: 1024,
             max_face_vertices: 16_384,
-            max_face_triangles: 16_384,
+            max_face_triangles: 131_072,
             max_vertices: 1_000_000,
             max_triangles: 1_000_000,
             max_refinement_depth: 8,
@@ -211,6 +211,7 @@ pub fn tessellate(model: &Model, options: &MeshOptions) -> Result<MeshReport> {
             reason: "invalid mesh tolerance or resource limits".into(),
         });
     }
+    let context = crate::spline::GeometryContext::new(model);
     let mut report = MeshReport::default();
     let mut seen = BTreeSet::new();
     for body in model.bodies() {
@@ -220,7 +221,7 @@ pub fn tessellate(model: &Model, options: &MeshOptions) -> Result<MeshReport> {
                 continue;
             }
             let built = if body_supported {
-                tessellate_face(face, options)
+                tessellate_face(face, options, &context)
             } else {
                 Err(FaceFailure::new(
                     MeshIssueKind::UnsupportedBodyTransform,
@@ -294,7 +295,11 @@ fn identity_transform(body: Body<'_>) -> bool {
             .is_none_or(|s| (s - 1.).abs() <= 1e-10)
 }
 
-fn edge_polyline(edge: Edge<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>> {
+fn edge_polyline(
+    edge: Edge<'_>,
+    options: &MeshOptions,
+    context: &crate::spline::GeometryContext,
+) -> FaceResult<Vec<Vec3>> {
     let a = edge
         .start()
         .and_then(|v| v.position())
@@ -303,32 +308,98 @@ fn edge_polyline(edge: Edge<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
         .end()
         .and_then(|v| v.position())
         .ok_or("missing edge end")?;
-    let curve = Curve::from_entity(edge.curve_entity().ok_or("missing boundary curve")?)?;
+    let curve = Curve::from_context(
+        edge.curve_entity().ok_or("missing boundary curve")?,
+        context,
+    )?;
     let [mut t0, mut t1] = edge.range().ok_or("missing boundary parameter range")?;
     if !edge.entity().sense() {
         t0 = -t0;
         t1 = -t1;
     }
-    let periodic = matches!(curve, Curve::Ellipse { .. });
+    let periodic =
+        matches!(curve, Curve::Ellipse { .. }) || matches!(&curve, Curve::Spline(s) if s.closed);
+    let period = match &curve {
+        Curve::Spline(s) => {
+            let [a, b] = s.domain(0);
+            b - a
+        }
+        _ => TAU,
+    };
+    let endpoint_tolerance = if matches!(&curve, Curve::Spline(..)) {
+        options.tolerance * 0.25
+    } else {
+        1e-6
+    };
+    if (norm(sub(curve.point_at(t0), a)) > endpoint_tolerance
+        || norm(sub(curve.point_at(t1), b)) > endpoint_tolerance)
+        && norm(sub(curve.point_at(-t0), a)) <= endpoint_tolerance
+        && norm(sub(curve.point_at(-t1), b)) <= endpoint_tolerance
+    {
+        t0 = -t0;
+        t1 = -t1;
+    }
     if !t0.is_finite()
         || !t1.is_finite()
-        || norm(sub(curve.point_at(t0), a)) > 1e-6
-        || norm(sub(curve.point_at(t1), b)) > 1e-6
+        || norm(sub(curve.point_at(t0), a)) > endpoint_tolerance
+        || norm(sub(curve.point_at(t1), b)) > endpoint_tolerance
     {
         let direction = if t1 >= t0 { 1. } else { -1. };
         t0 = curve.invert(a);
         t1 = curve.invert(b);
         if periodic {
             if norm(sub(a, b)) < 1e-10 {
-                t1 = t0 + direction * TAU;
+                t1 = t0 + direction * period;
             } else {
                 while (t1 - t0) * direction < 0. {
-                    t1 += direction * TAU;
+                    t1 += direction * period;
                 }
             }
         }
     }
+    if let Curve::Spline(ref spline) = curve {
+        let mut parameters = vec![t0];
+        let mut knots = Vec::new();
+        let start = if spline.closed {
+            (t0.min(t1) / period).floor() as i32 - 1
+        } else {
+            0
+        };
+        let end = if spline.closed {
+            (t0.max(t1) / period).ceil() as i32 + 1
+        } else {
+            0
+        };
+        if end - start > 4 {
+            return Err(FaceFailure::new(
+                MeshIssueKind::ResourceLimit,
+                "spline period limit",
+            ));
+        }
+        for n in start..=end {
+            knots.extend(
+                spline.knots[0]
+                    .iter()
+                    .map(|t| t + n as f64 * period)
+                    .filter(|t| *t > t0.min(t1) && *t < t0.max(t1)),
+            );
+        }
+        knots.sort_by(f64::total_cmp);
+        knots.dedup();
+        if t1 < t0 {
+            knots.reverse();
+        }
+        parameters.extend(knots);
+        parameters.push(t1);
+        let mut points = vec![a];
+        for pair in parameters.windows(2) {
+            sample_spline(&curve, pair[0], pair[1], 0, options, &mut points)?;
+        }
+        *points.last_mut().unwrap() = b;
+        return Ok(points);
+    }
     let segments = match curve {
+        Curve::Spline(..) => unreachable!(),
         Curve::Straight { .. } => 1,
         Curve::Ellipse { major, ratio, .. } => {
             let radius = norm(major) * ratio.max(1.);
@@ -356,7 +427,11 @@ fn edge_polyline(edge: Edge<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
     Ok(points)
 }
 
-fn ring_polyline(ring: Loop<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>> {
+fn ring_polyline(
+    ring: Loop<'_>,
+    options: &MeshOptions,
+    context: &crate::spline::GeometryContext,
+) -> FaceResult<Vec<Vec3>> {
     let mut points: Vec<Vec3> = Vec::new();
     let mut last = None;
     for coedge in ring.coedges() {
@@ -366,7 +441,7 @@ fn ring_polyline(ring: Loop<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
         {
             continue;
         }
-        let mut line = edge_polyline(edge, options)?;
+        let mut line = edge_polyline(edge, options, context)?;
         if !coedge.entity().sense() {
             line.reverse();
         }
@@ -396,6 +471,7 @@ fn ring_polyline(ring: Loop<'_>, options: &MeshOptions) -> FaceResult<Vec<Vec3>>
 
 fn invert(surface: &Surface, point: Vec3) -> Uv {
     match *surface {
+        Surface::Spline(ref s) => s.invert(point),
         Surface::Plane {
             origin,
             normal,
@@ -450,7 +526,7 @@ fn invert(surface: &Surface, point: Vec3) -> Uv {
 }
 fn periods(surface: &Surface) -> [Option<f64>; 2] {
     match surface {
-        Surface::Plane { .. } => [None, None],
+        Surface::Plane { .. } | Surface::Spline(..) => [None, None],
         Surface::Torus { .. } => [Some(TAU), Some(TAU)],
         _ => [Some(TAU), None],
     }
@@ -495,12 +571,16 @@ struct FaceMesh {
     triangles: Vec<[u32; 3]>,
 }
 
-fn tessellate_face(face: Face<'_>, options: &MeshOptions) -> FaceResult<FaceMesh> {
-    let surface = Surface::from_entity(face.surface_entity().ok_or("missing surface")?)?;
-    let rings: Vec<_> = face
+fn tessellate_face(
+    face: Face<'_>,
+    options: &MeshOptions,
+    context: &crate::spline::GeometryContext,
+) -> FaceResult<FaceMesh> {
+    let surface = Surface::from_context(face.surface_entity().ok_or("missing surface")?, context)?;
+    let mut rings: Vec<_> = face
         .loops()
         .into_iter()
-        .map(|ring| ring_polyline(ring, options))
+        .map(|ring| ring_polyline(ring, options, context))
         .collect::<FaceResult<_>>()?;
     if rings.is_empty() {
         return Err(FaceFailure::new(
@@ -522,15 +602,29 @@ fn tessellate_face(face: Face<'_>, options: &MeshOptions) -> FaceResult<FaceMesh
             }
         }
     }
-    let uvs: Vec<_> = rings.iter().map(|ring| to_uv(&surface, ring)).collect();
+    let mut uvs: Vec<_> = rings.iter().map(|ring| to_uv(&surface, ring)).collect();
+    if matches!(surface, Surface::Sphere { .. }) {
+        for (ring, uv) in rings.iter_mut().zip(&mut uvs) {
+            for i in (0..uv.len()).rev() {
+                if (uv[i][1].abs() - std::f64::consts::FRAC_PI_2).abs() < 1e-8 {
+                    let previous = uv[(i + uv.len() - 1) % uv.len()][0];
+                    let next = uv[(i + 1) % uv.len()][0];
+                    uv[i][0] = next;
+                    uv.insert(i, [previous, uv[i][1]]);
+                    ring.insert(i, ring[i]);
+                }
+            }
+        }
+    }
     let wrapping = !matches!(surface, Surface::Plane { .. }) && uvs.iter().any(|ring| wraps(ring));
-    let (points, parameters, triangles) = if wrapping {
-        periodic_strip(&surface, &uvs, options)?
+    let wrapping_v = matches!(surface, Surface::Torus { .. })
+        && uvs
+            .iter()
+            .any(|r| wraps(&r.iter().map(|p| [p[1], p[0]]).collect::<Vec<_>>()));
+    let (points, parameters, triangles) = if wrapping || wrapping_v {
+        periodic_strip(&surface, &uvs, options, wrapping_v && !wrapping)?
     } else if rings.len() > 1 && !matches!(surface, Surface::Plane { .. }) {
-        return Err(FaceFailure::new(
-            MeshIssueKind::UnsupportedTopology,
-            "nonplanar face with holes needs constrained curved triangulation",
-        ));
+        polygon(&surface, &rings, &uvs)?
     } else if rings.len() == 1 && !matches!(surface, Surface::Plane { .. }) {
         if let Some(triangles) = monotone_triangles(&uvs[0]) {
             (rings[0].clone(), uvs[0].clone(), triangles)
@@ -668,7 +762,9 @@ fn polygon(surface: &Surface, rings: &[Vec<Vec3>], uvs: &[Vec<Uv>]) -> FaceResul
     if expected <= 0. || (actual - expected).abs() > 1e-8 * expected.max(1.) {
         return Err(FaceFailure::new(
             MeshIssueKind::Tessellation,
-            "triangulation does not preserve the trimmed region/holes",
+            format!(
+                "triangulation does not preserve the trimmed region/holes: expected {expected}, actual {actual}"
+            ),
         ));
     }
     Ok((points, uv, triangles))
@@ -678,45 +774,154 @@ fn periodic_strip(
     surface: &Surface,
     rings: &[Vec<Uv>],
     options: &MeshOptions,
+    swap: bool,
 ) -> FaceResult<Triangulation> {
-    if rings.len() != 2 || !rings.iter().all(|ring| wraps(ring)) {
+    let swapped: Vec<Vec<Uv>> = rings
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|p| if swap { [p[1], p[0]] } else { *p })
+                .collect()
+        })
+        .collect();
+    let rings = &swapped;
+    let point = |p: Uv| {
+        if swap {
+            surface.point_at(p[1], p[0])
+        } else {
+            surface.point_at(p[0], p[1])
+        }
+    };
+    let finish = |(p, u, t): Triangulation| {
+        (
+            p,
+            u.into_iter()
+                .map(|v| if swap { [v[1], v[0]] } else { v })
+                .collect(),
+            t,
+        )
+    };
+    let wrapping: Vec<_> = rings
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| wraps(r))
+        .map(|(i, _)| i)
+        .collect();
+    if wrapping.len() != 2 {
         return Err(FaceFailure::new(
             MeshIssueKind::UnsupportedTopology,
-            "periodic face needs two complete boundary rings",
+            "periodic face needs two wrapping boundary rings",
         ));
     }
-    let mut heights = [0.; 2];
-    for (i, ring) in rings.iter().enumerate() {
-        heights[i] = ring.iter().map(|p| p[1]).sum::<f64>() / ring.len() as f64;
-        if ring.iter().any(|p| (p[1] - heights[i]).abs() > 1e-6) {
+    // Cut the cylinder parameter domain along a seam that crosses each boundary
+    // once and no hole. Preserve every original boundary sample and hole.
+    let mut candidates: Vec<_> = rings
+        .iter()
+        .flatten()
+        .map(|p| p[0].rem_euclid(TAU))
+        .collect();
+    candidates.sort_by(f64::total_cmp);
+    candidates.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    for k in 0..candidates.len() {
+        let next = if k + 1 < candidates.len() {
+            candidates[k + 1]
+        } else {
+            candidates[0] + TAU
+        };
+        let seam = (candidates[k] + next) * 0.5;
+        let mut chains = Vec::new();
+        for &index in &wrapping {
+            let ring = &rings[index];
+            let mut cut = None;
+            let mut crossings = 0;
+            for i in 0..ring.len() {
+                let a = ring[i];
+                let mut b = ring[(i + 1) % ring.len()];
+                b[0] -= ((b[0] - a[0]) / TAU).round() * TAU;
+                let u = seam + ((a[0] - seam) / TAU).ceil() * TAU;
+                let v = seam + ((a[0] - seam) / TAU).floor() * TAU;
+                for u in [u, v] {
+                    if u > a[0].min(b[0]) + 1e-10 && u < a[0].max(b[0]) - 1e-10 {
+                        crossings += 1;
+                        cut = Some((i, [u, a[1] + (b[1] - a[1]) * (u - a[0]) / (b[0] - a[0])]));
+                    }
+                }
+            }
+            if crossings != 1 {
+                break;
+            }
+            let (i, c) = cut.unwrap();
+            let mut chain = vec![c];
+            for step in 1..=ring.len() {
+                let mut p = ring[(i + step) % ring.len()];
+                let prev = chain.last().unwrap()[0];
+                p[0] -= ((p[0] - prev) / TAU).round() * TAU;
+                chain.push(p);
+            }
+            let mut last = c;
+            last[0] -= ((last[0] - chain.last().unwrap()[0]) / TAU).round() * TAU;
+            chain.push(last);
+            if last[0] < c[0] {
+                chain.reverse();
+            }
+            let shift = seam - chain[0][0];
+            for p in &mut chain {
+                p[0] += shift;
+            }
+            chains.push(chain);
+        }
+        if chains.len() != 2 {
+            continue;
+        }
+        if chains[0][0][1] > chains[1][0][1] {
+            chains.swap(0, 1);
+        }
+        let mut outer = chains.remove(0);
+        let mut upper = chains.remove(0);
+        upper.reverse();
+        outer.extend(upper);
+        let mut uvs = vec![outer];
+        let mut valid = true;
+        for (i, ring) in rings.iter().enumerate() {
+            if wrapping.contains(&i) {
+                continue;
+            }
+            let mut r = ring.clone();
+            let lo = r.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+            let shift = ((seam - lo) / TAU).ceil() * TAU;
+            for p in &mut r {
+                p[0] += shift;
+            }
+            if r.iter().any(|p| p[0] <= seam || p[0] >= seam + TAU) {
+                valid = false;
+                break;
+            }
+            uvs.push(r);
+        }
+        if !valid {
+            continue;
+        }
+        let points: Vec<_> = uvs
+            .iter()
+            .map(|r| r.iter().map(|p| point(*p)).collect())
+            .collect();
+        if points.iter().map(Vec::len).sum::<usize>() > options.max_face_vertices {
             return Err(FaceFailure::new(
-                MeshIssueKind::UnsupportedTopology,
-                "periodic boundary with varying second parameter unsupported",
+                MeshIssueKind::ResourceLimit,
+                "periodic boundary vertex limit",
             ));
         }
-    }
-    heights.sort_by(f64::total_cmp);
-    let count = rings.iter().map(Vec::len).max().unwrap_or(3).max(12);
-    if count > options.max_edge_segments {
-        return Err(FaceFailure::new(
-            MeshIssueKind::ResourceLimit,
-            "periodic strip exceeds segment limit",
-        ));
-    }
-    let mut points = Vec::with_capacity((count + 1) * 2);
-    let mut uv = Vec::with_capacity((count + 1) * 2);
-    for v in heights {
-        for i in 0..=count {
-            let u = i as f64 * TAU / count as f64;
-            uv.push([u, v]);
-            points.push(surface.point_at(u, v));
+        if uvs.len() == 1
+            && let Some(triangles) = monotone_triangles(&uvs[0])
+        {
+            return Ok(finish((points[0].clone(), uvs[0].clone(), triangles)));
         }
+        return polygon(surface, &points, &uvs).map(finish);
     }
-    let width = count + 1;
-    let triangles = (0..count)
-        .flat_map(|i| [[i, i + 1, i + width], [i + 1, i + width + 1, i + width]])
-        .collect();
-    Ok((points, uv, triangles))
+    Err(FaceFailure::new(
+        MeshIssueKind::UnsupportedTopology,
+        "no unambiguous periodic seam",
+    ))
 }
 
 fn refine(
@@ -767,29 +972,42 @@ fn refine(
         ));
     }
     if error > options.tolerance && !matches!(surface, Surface::Plane { .. }) {
-        if depth >= options.max_refinement_depth {
+        if depth >= options.max_refinement_depth * 3 {
             return Err(FaceFailure::new(
                 MeshIssueKind::ResourceLimit,
                 "curved face exceeds tolerance at refinement limit",
             ));
         }
-        for (u, p) in [
-            (
-                [uv[0], midpoint_uv[0], midpoint_uv[2]],
-                [xyz[0], midpoint_xyz[0], midpoint_xyz[2]],
-            ),
-            (
-                [midpoint_uv[0], uv[1], midpoint_uv[1]],
-                [midpoint_xyz[0], xyz[1], midpoint_xyz[1]],
-            ),
-            (
-                [midpoint_uv[2], midpoint_uv[1], uv[2]],
-                [midpoint_xyz[2], midpoint_xyz[1], xyz[2]],
-            ),
-            (midpoint_uv, midpoint_xyz),
-        ] {
-            refine(surface, u, p, depth + 1, options, result)?;
-        }
+        let edge = (0..3)
+            .max_by(|&a, &b| {
+                norm(sub(
+                    midpoint_xyz[a],
+                    scale(add(xyz[a], xyz[(a + 1) % 3]), 0.5),
+                ))
+                .total_cmp(&norm(sub(
+                    midpoint_xyz[b],
+                    scale(add(xyz[b], xyz[(b + 1) % 3]), 0.5),
+                )))
+            })
+            .unwrap();
+        let j = (edge + 1) % 3;
+        let k = (edge + 2) % 3;
+        refine(
+            surface,
+            [uv[edge], midpoint_uv[edge], uv[k]],
+            [xyz[edge], midpoint_xyz[edge], xyz[k]],
+            depth + 1,
+            options,
+            result,
+        )?;
+        refine(
+            surface,
+            [midpoint_uv[edge], uv[j], uv[k]],
+            [midpoint_xyz[edge], xyz[j], xyz[k]],
+            depth + 1,
+            options,
+            result,
+        )?;
         return Ok(());
     }
     let normal = cross(sub(xyz[1], xyz[0]), sub(xyz[2], xyz[0]));
@@ -817,6 +1035,47 @@ fn refine(
     let base = result.positions.len() as u32;
     result.positions.extend(xyz);
     result.triangles.push([base, base + 1, base + 2]);
+    Ok(())
+}
+
+fn sample_spline(
+    curve: &Curve,
+    a: f64,
+    b: f64,
+    depth: usize,
+    options: &MeshOptions,
+    points: &mut Vec<Vec3>,
+) -> FaceResult<()> {
+    let p = curve.point_at(a);
+    let q = curve.point_at(b);
+    let error = [0.25, 0.5, 0.75]
+        .into_iter()
+        .map(|f| {
+            norm(sub(
+                curve.point_at(a + (b - a) * f),
+                add(scale(p, 1. - f), scale(q, f)),
+            ))
+        })
+        .fold(0., f64::max);
+    if error > options.tolerance * 0.25 {
+        if depth >= 20 || points.len() >= options.max_edge_segments {
+            return Err(FaceFailure::new(
+                MeshIssueKind::ResourceLimit,
+                "spline edge sampling limit",
+            ));
+        }
+        let m = (a + b) * 0.5;
+        sample_spline(curve, a, m, depth + 1, options, points)?;
+        sample_spline(curve, m, b, depth + 1, options, points)?;
+    } else {
+        if points.len() > options.max_edge_segments {
+            return Err(FaceFailure::new(
+                MeshIssueKind::ResourceLimit,
+                "spline edge sampling limit",
+            ));
+        }
+        points.push(q);
+    }
     Ok(())
 }
 
@@ -1035,7 +1294,8 @@ mod tests {
             .into_iter()
             .map(|v| (0..16).map(|i| [i as f64 * TAU / 16., v]).collect())
             .collect();
-        let (points, parameters, triangles) = periodic_strip(&surface, &rings, &options).unwrap();
+        let (points, parameters, triangles) =
+            periodic_strip(&surface, &rings, &options, false).unwrap();
         let mut mesh = FaceMesh::default();
         for triangle in triangles {
             refine(
@@ -1066,14 +1326,75 @@ mod tests {
     }
 
     #[test]
+    fn varying_periodic_boundary_and_hole_preserve_area() {
+        let surface = Surface::Cone {
+            base: [0.; 3],
+            axis: [0., 0., 1.],
+            major: [10., 0., 0.],
+            ratio: 1.,
+            sin_angle: 0.,
+            cos_angle: 1.,
+        };
+        let lower: Vec<_> = (0..64)
+            .map(|i| {
+                let u = i as f64 * TAU / 64.;
+                [u, 0.2 * u.sin()]
+            })
+            .collect();
+        let upper: Vec<_> = lower
+            .iter()
+            .rev()
+            .map(|p| [p[0], 2. + 0.2 * p[0].sin()])
+            .collect();
+        let hole = vec![[1., 0.8], [1.2, 0.8], [1.2, 1.2], [1., 1.2]];
+        let (_, uv, tri) = periodic_strip(
+            &surface,
+            &[lower, upper, hole],
+            &MeshOptions::default(),
+            false,
+        )
+        .unwrap();
+        let area: f64 = tri
+            .iter()
+            .map(|t| triangle_area(uv[t[0]], uv[t[1]], uv[t[2]]).abs())
+            .sum();
+        assert!((area - (TAU * 2. - 0.08)).abs() < 1e-8);
+    }
+    #[test]
+    fn torus_minor_period_is_preserved() {
+        let surface = Surface::Torus {
+            centre: [0.; 3],
+            axis: [0., 0., 1.],
+            u_ref: [1., 0., 0.],
+            major_radius: 3.,
+            minor_radius: 1.,
+        };
+        let rings: Vec<Vec<Uv>> = [0.2, 1.1]
+            .into_iter()
+            .map(|u| (0..32).map(|i| [u, i as f64 * TAU / 32.]).collect())
+            .collect();
+        let (p, uv, tri) = periodic_strip(&surface, &rings, &MeshOptions::default(), true).unwrap();
+        assert!(
+            p.iter()
+                .zip(&uv)
+                .all(|(p, uv)| norm(sub(*p, surface.point_at(uv[0], uv[1]))) < 1e-10)
+        );
+        let area: f64 = tri
+            .iter()
+            .map(|t| triangle_area(uv[t[0]], uv[t[1]], uv[t[2]]).abs())
+            .sum();
+        assert!((area - 0.9 * TAU).abs() < 1e-8);
+    }
+
+    #[test]
     fn unsupported_faces_are_explicit_and_mesh_limits_are_bounded() {
         let mut model = plane_model(false);
-        model.entities[4].types[0] = "spline".into();
+        model.entities[4].types[0] = "unknown-surface".into();
         let report = tessellate(&model, &Default::default()).unwrap();
         assert!(report.positions.is_empty());
         assert_eq!(report.faces_skipped, 1);
         assert_eq!(report.issues[0].kind, MeshIssueKind::UnsupportedGeometry);
-        assert!(report.issues[0].reason.contains("spline"));
+        assert!(report.issues[0].reason.contains("unknown-surface"));
         model.entities[4].types[0] = "plane".into();
         model.entities[4].tokens.truncate(2);
         let malformed = tessellate(&model, &Default::default()).unwrap();

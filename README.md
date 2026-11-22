@@ -61,7 +61,7 @@ references into a single assembly.
 | Archives | Stored, Deflate, and Zstandard ZIP entries; CRC verification; nested F3D/F3Z packages with resource limits |
 | Geometry records | ASM/ACIS binary tokens, live topology traversal, and retained source records |
 | Analytic geometry | Lines, ellipses, planes, cones/cylinders, spheres, and tori |
-| Display meshes | Supported trimmed analytic faces, planar holes, and periodic bands; per-face/body identity and skipped-face diagnostics |
+| Display meshes | Trimmed analytic and explicit NUBS/NURBS faces, holes, and periodic bands; per-face/body identity and skipped-face diagnostics |
 | Assembly information | Component names, supported ownership bindings, and rigid placement candidates; occurrence decoding is partial |
 | Embedded assets | Raw decompressed previews, materials, CAM XML, and other archive payloads |
 | Splines | Tokens retained; typed NURBS extraction, evaluation, and tessellation are not implemented |

@@ -61,15 +61,16 @@ references into a single assembly.
 | Archives | Stored, Deflate, and Zstandard ZIP entries; CRC verification; nested F3D/F3Z packages with resource limits |
 | Geometry records | ASM/ACIS binary tokens, live topology traversal, and retained source records |
 | Analytic geometry | Lines, ellipses, planes, cones/cylinders, spheres, and tori |
-| Display meshes | Trimmed analytic and explicit NUBS/NURBS faces, holes, and periodic bands; per-face/body identity and skipped-face diagnostics |
+| Display meshes | Trimmed analytic and explicit NUBS/NURBS faces, holes, and periodic bands; per-face/body identity and skipped-face diagnostics; a closed mesh for each solid body whose faces all mesh |
 | Assembly information | Component names, supported ownership bindings, and rigid placement candidates; occurrence decoding is partial |
 | Embedded assets | Raw decompressed previews, materials, CAM XML, and other archive payloads |
 | Splines | Tokens retained; typed NURBS extraction, evaluation, and tessellation are not implemented |
 
 The library does not write Fusion files, regenerate features, solve sketches,
 perform solid-modeling operations, decode graphics caches, or export standard
-mesh-file formats. A successful read does not guarantee a complete display mesh
-or a watertight solid. Compatibility is limited to the record layouts currently
+mesh-file formats. A successful read does not guarantee a complete display mesh.
+A body's mesh is closed only when all of its faces are meshed; a skipped face
+leaves a gap. Compatibility is limited to the record layouts currently
 implemented; unsupported metadata and skipped faces remain visible in diagnostics.
 
 See [reading notes](docs/reading-notes.md) for detailed format coverage.
@@ -146,8 +147,8 @@ fn main() -> f3d::Result<()> {
                 eprintln!("{:?}: {}", issue.kind, issue.reason);
             }
             for body in report.split_by_body()? {
-                println!("body {}: {} triangles",
-                    body.body_index, body.triangles.len());
+                println!("body {}: {} triangles, closed: {}",
+                    body.body_index, body.triangles.len(), body.edge_counts().closed());
             }
         }
     }
@@ -157,7 +158,10 @@ fn main() -> f3d::Result<()> {
 
 `MeshOptions` controls tolerance and sampling/output budgets. Unsupported faces
 are skipped with reasons, so applications should show coverage alongside the
-result. Inspect `Document::issues` for metadata limitations and mesh issues for
+result. Faces that meet at an edge share the vertices along it, so the mesh of
+a solid body is closed when none of its faces is skipped. `BodyMesh::edge_counts`
+counts the triangle sides that do not close; use it before treating a mesh as
+a solid. Inspect `Document::issues` for metadata limitations and mesh issues for
 missing faces. Typed errors distinguish unsupported geometry from malformed
 geometry. [Reading notes](docs/reading-notes.md) explain transforms, units,
 error categories, and mesh limitations in more detail.

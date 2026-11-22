@@ -71,9 +71,11 @@ The explicit spline and trim implementation was also checked against Autodesk's
 Brother U500Xd2 F3D (SHA-256
 `6031fdce96f223ca1d0b838d73e560e1744ca31ec81516393b30107257169397`).
 At the default 0.01 cm chord tolerance, all 3,060 source faces mesh without
-skipped-face diagnostics. This supersedes the historical mesh coverage above;
-it is a face-coverage check, not a watertightness or manufacturing certification.
-The source is downloaded separately and is not included in Git.
+skipped-face diagnostics, and each of the 58 bodies has a closed mesh with
+positive volume (`BodyMesh::edge_counts` reports no open or repeated sides). This
+supersedes the historical mesh coverage above. It checks face coverage and mesh
+closure; it is not a manufacturing certification, and triangles are not checked
+for intersection. The source is downloaded separately and is not included in Git.
 
 ```sh
 F3D_BROTHER_MODEL=/path/to/brother.f3d cargo test --release --test autodesk -- --ignored
@@ -81,4 +83,13 @@ F3D_BROTHER_MODEL=/path/to/brother.f3d cargo test --release --test autodesk -- -
 
 Synthetic tests cover rational curve evaluation/inversion, tensor control order,
 malformed spline payloads, periodic curve wrapping, variable-height periodic
-trims with holes, and torus minor-period trims.
+trims with holes, and torus minor-period trims. Hand-built solids (a box, a
+round bar with a straight and with a slanted seam, half a round bar, a corner
+of a ball with a vertex at the sphere's pole, a barrel cut from a sphere, and a
+pipe elbow cut from a torus) must each mesh closed with a volume just under the
+exact one.
+
+`tools/check_mesh.py` compares triangle winding with the face `sense` flag and
+ezf3d's surface normal. It has not been run against meshes wound by boundary
+direction; on the Autodesk Brother source it is expected to object to the one
+face that lies inside the spindle of a self-intersecting torus.

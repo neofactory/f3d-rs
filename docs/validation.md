@@ -71,9 +71,11 @@ The explicit spline and trim implementation was also checked against Autodesk's
 Brother U500Xd2 F3D (SHA-256
 `6031fdce96f223ca1d0b838d73e560e1744ca31ec81516393b30107257169397`).
 At the default 0.01 cm chord tolerance, all 3,060 source faces mesh without
-skipped-face diagnostics. This supersedes the historical mesh coverage above;
-it is a face-coverage check, not a watertightness or manufacturing certification.
-The source is downloaded separately and is not included in Git.
+skipped-face diagnostics, and each of the 58 bodies has a closed mesh with
+positive volume (`BodyMesh::edge_counts` reports no open or repeated sides). This
+supersedes the historical mesh coverage above. It checks face coverage and mesh
+closure; it is not a manufacturing certification, and triangles are not checked
+for intersection. The source is downloaded separately and is not included in Git.
 
 ```sh
 F3D_BROTHER_MODEL=/path/to/brother.f3d cargo test --release --test autodesk -- --ignored
@@ -81,4 +83,19 @@ F3D_BROTHER_MODEL=/path/to/brother.f3d cargo test --release --test autodesk -- -
 
 Synthetic tests cover rational curve evaluation/inversion, tensor control order,
 malformed spline payloads, periodic curve wrapping, variable-height periodic
-trims with holes, and torus minor-period trims.
+trims with holes, and torus minor-period trims. Hand-built solids (a box, a
+round bar with a straight and with a slanted seam, half a round bar, a corner
+of a ball with a vertex at the sphere's pole, a barrel cut from a sphere, and a
+pipe elbow cut from a torus) must each mesh closed with a volume just under the
+exact one.
+
+`tools/check_mesh.py` stops at its first failed check on the Autodesk Brother
+source, with or without closed meshes: its reference does not evaluate spline
+surfaces (311 faces), and 48 planar faces differ in area from the reference
+tessellation. Run check by check, closed meshes change two things. The corner
+test (within 0.0001 cm of the surface) fails on 23 more conical faces, by up to
+0.0003 cm: a boundary vertex is now the edge sample that both faces share,
+where a periodic band used to put a copy of its own on its surface. The winding
+test, which uses the face `sense` flag and ezf3d's surface normal, fails on the
+one face that lies inside the spindle of a self-intersecting torus. No face
+gains a centroid-deviation or planar-area failure.

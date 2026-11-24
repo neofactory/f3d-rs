@@ -11,12 +11,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for issue in &report.issues {
                 *reasons.entry(&issue.reason).or_default() += 1;
             }
+            let bodies = report.split_by_body()?;
             eprintln!(
-                "{}: {} triangles; {} faces meshed, {} skipped; {:?}",
+                "{}: {} triangles; {} faces meshed, {} skipped; {} of {} bodies closed; {:?}",
                 brep.path,
                 report.triangles.len(),
                 report.faces_meshed,
                 report.faces_skipped,
+                bodies
+                    .iter()
+                    .filter(|body| body.edge_counts().closed())
+                    .count(),
+                bodies.len(),
                 reasons
             );
             if args.iter().any(|arg| arg == "--json") {
